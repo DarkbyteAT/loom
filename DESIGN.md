@@ -5,6 +5,73 @@
 > `loom` package that replaces it. The contract is opinionated, decided,
 > and final unless the open questions in §7 say otherwise.
 
+> ## ⚠️ PENDING SCOPE DECISION (2026-05-15)
+>
+> The user is deciding whether SIREN / H-SIREN / WIRE bases and the
+> Fourier-feature encodings (Gaussian / Dyadic / LearnedGaussian) should
+> live in a **separate upstream INR library** that `loom` depends on,
+> rather than inside `loom` itself. If they split, `loom` would own only
+> the *renderer-specific* machinery on top of the INR primitives.
+>
+> This document is currently written under the **"loom owns INRs"**
+> assumption. The annotations below flag exactly which sections would
+> migrate to the upstream library so the split can be done mechanically
+> once the user decides.
+>
+> ### Migration tags
+>
+> - `[INR]` — would move to the upstream INR library (e.g. `inr-jax`,
+>   `siren-jax`, or similar). Generic INR primitives, not coupled to
+>   weight rendering.
+> - `[RENDERER]` — stays in `loom` regardless of the scope decision.
+>   Weight-rendering-specific machinery; meaningless without a target
+>   network to virtualise.
+> - `[BOTH]` — duplicated or referenced by both sides; the split version
+>   would surface this in the upstream INR library's docs *and* the
+>   `loom` README.
+>
+> ### Section-by-section split (if user picks "separate INR library")
+>
+> | Section | Tag | Destination if split |
+> |---|---|---|
+> | §2.2 `loom.basis` (`Basis`, `SIREN`, `HSIREN`, `WIRE`, `BasisLayer`, `BasisBody`, `siren_init`) | `[INR]` | upstream INR library |
+> | §2.3 `loom.encoding` (`Encoding`, `Identity`, `Gaussian`, `GaussianPerLeaf`, `LearnedGaussian`, `Dyadic`, `nyquist_sigma`) | `[INR]` | upstream INR library — but see Q6: `nyquist_sigma` is renderer-flavoured and may stay in `loom` |
+> | §2.4 `loom.ortho` (`polar_orthogonalise`) | `[RENDERER]` | stays in `loom` — orthogonal-weight constraint is renderer-specific |
+> | §2.5 `loom.conditioning` (`LeafConditioning`) | `[RENDERER]` | stays in `loom` — "per-leaf conditioning of an INR for weight rendering" is the renderer's contribution, not the INR's |
+> | §2.6 `loom.renderer` (`LeafSlot`, `PerLeafSlot`, `SharedRenderer`, `PerLeafRenderer`, `DirectRenderer`, `Renderer` protocol, `virtualize`, `render`, `is_weight`) | `[RENDERER]` | stays |
+> | §2.7 `loom.condition` (`Topology`, `Condition`, `ConditionRegistry`) | `[RENDERER]` | stays — basis × encoding × ortho composition is renderer-experiment vocabulary |
+> | §2.8 `loom.target_protocol` | `[RENDERER]` | stays |
+> | §2.9 `loom.task_protocol` | `[RENDERER]` | stays |
+> | §2.1 `loom.config` (`RendererConfig`, `TrainingConfig`) | mixed | split: most of `RendererConfig` tracks INR body sizing (would move as `BodyConfig`), but `polar_iters` is renderer-only; `TrainingConfig` is renderer-only |
+> | §2.10 `loom.training` | `[RENDERER]` | stays |
+> | §2.11 `loom.diagnostics`, `loom.metrics`, `loom.plotting` | `[RENDERER]` | stays |
+> | §3 globals table — basis/encoding rows (`SIREN_HIDDEN`, `OMEGA_FIRST`, …) | `[INR]` | move |
+> | §3 globals table — `NUM_SEEDS`, `EVAL_EVERY`, `MASTER_SEED`, training/diagnostics rows | `[RENDERER]` | stays |
+> | §4 mathematics-first ergonomics — `Basis` / `Encoding` parts | `[INR]` | quoted from upstream library's contract |
+> | §4 — `Condition` / `polar` parts | `[RENDERER]` | stays |
+> | §6 invariants — `BasisBody` eqx shape, basis activations | `[INR]` | move |
+> | §6 invariants — `polar_orthogonalise`, `master_seed=42`, `is_weight`, per-coord-mean subtraction, `RunResult` shapes, `scan_tqdm` | `[RENDERER]` | stays |
+> | §7 Q4 `Encoding.materialise` | `[INR]` | move |
+> | §7 Q1, Q2, Q3, Q5, Q7 | `[RENDERER]` | stays |
+> | §7 Q6 `nyquist_sigma` placement | `[BOTH]` | the split *is* this question; answered by the user's decision |
+> | §7 Q8 `Basis.init_params` | `[INR]` | move |
+> | §8 examples | `[BOTH]` | imports change source: `from inr_jax import SIREN, Gaussian` + `from loom import Condition, train_multi_seed, ...` |
+>
+> ### What stays semantically identical either way
+>
+> - `Condition.shared(basis=..., encoding=..., ortho=...)` — the three-
+>   axis composition. Only the *import sources* of the `Basis` /
+>   `Encoding` values change.
+> - The `Renderer` / `Target` / `TaskCfg` / `RunResult` contracts.
+> - The capacity-sweep API (`RendererConfig(hidden=48)`, or whatever the
+>   equivalent ends up being called in the split form).
+> - The migration strategy in §5 — the demo project still lives
+>   downstream of `loom` regardless of where the INR primitives live.
+>
+> The split would add one dependency line (`loom` depends on `inr-jax`)
+> and a new repo to maintain. The surface area of `loom` shrinks; the
+> user-facing call sites only change their imports.
+
 ## Library positioning
 
 `loom` is the **machinery**, not the **instantiations**. Same scope rule
