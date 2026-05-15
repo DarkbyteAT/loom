@@ -7,33 +7,72 @@
 
 ## Library positioning
 
-`loom` is a **reusable library**, peer to `samgria` (SAM variants),
-`rltrain` (RL algorithms), and `xptrack` (experiment tracking). The
-specific experiment in `experiment/experiment.py` is **one consumer** of
-`loom`, not its defining use case.
+`loom` is the **machinery**, not the **instantiations**. Same scope rule
+as the peer libraries:
 
-Future FWS-adjacent work — transformer weight renderers, RL policy-network
-renderers, diffusion U-Net renderers, etc. — should `import loom`, write
-~20 lines of glue (a new target class, a new `TaskCfg`, a custom
-`ConditionRegistry`), and run. They should *not* fork the monolith.
+- `rltrain` ships RL algorithms, not env-specific deps (no `minatar`,
+  no `ple`); users plug a gymnasium env from downstream scripts.
+- `samgria` ships SAM/ASAM/ImplicitMAML primitives, not training loops.
+- `xptrack` ships the tracker, not a particular dataset of experiments.
+- **`loom` ships the renderer, the condition algebra, and the training
+  loop primitives — not concrete targets, not dataset loaders, not a
+  pre-populated condition registry.**
 
-That framing has three load-bearing consequences for this contract:
+### What `loom` owns
 
-1. **Reference targets and loaders ship inside `loom`** as built-ins
-   (`FCHeavyCNN`, `load_digits`, …). They are *examples of the
-   contract*, not "experimental fixtures". Adding a new target or
-   dataset is one file + one registry line; the built-ins demonstrate
-   the pattern.
-2. **`Condition`, `Encoding`, `Basis` are the library's three core value
-   types**. They must be top-level importable: `from loom import Condition,
-   SIREN, Gaussian` works. Submodule paths exist for narrower imports
-   but the top-level surface is the primary advertised contract.
-3. **Runner scripts are NOT part of `loom`.** The eight scripts currently
-   in `experiment/` (`run_probe.py`, `run_basin_study.py`, …) become
-   *consumers* of `loom` — they either stay in `experiment/` as a
-   downstream project, or move under `examples/` in this repo as
-   demonstrations. Either way, `pip install loom` does not install them.
-   See §5.
+- `Basis` ABC + `SIREN`, `HSIREN`, `WIRE` subclasses
+- Renderer machinery — virtualisation, `render`, `polar_orthogonalise`,
+  FiLM, `LeafSlot`, `PerLeafSlot`, `LeafConditioning`
+- `Encoding` ABC + `Identity`, `Gaussian`, `GaussianPerLeaf`,
+  `LearnedGaussian`, `Dyadic`, `nyquist_sigma`
+- `Condition` value type composing the three axes (basis × encoding ×
+  ortho) + `ConditionRegistry` container
+- The **`Target` protocol** and the **`TaskCfg`/`TaskData` types** —
+  these are *contracts*, not concrete implementations
+- Training primitives: `train_multi_seed`, `RunResult`, optimiser-group
+  machinery, `clip_each_leaf`
+- Diagnostics primitives: cross-seed cosine, group grad norms
+- Plotting helpers that consume `RunResult` and produce the standard
+  curves/bars
+
+### What `loom` does NOT own
+
+- ❌ **Dataset loaders.** `load_digits` (sklearn), `load_iris`
+  (sklearn), `load_cifar10` (torchvision) are sklearn/torchvision-
+  coupled and demonstration code. They do not live in the package.
+- ❌ **Concrete target architectures.** `FCHeavyCNN`, `IrisMLP`,
+  `ResidualConvNet` and their `DigitsCNN` / `CifarCNN` /
+  `DigitsDeepCNN` / `CifarDeepCNN` partials are tied to specific input
+  shapes and classification budgets. They are demonstration code.
+- ❌ **The pre-populated condition table.** The 25-row `CONDITIONS`
+  dict (`direct`, `shared-si+ff-pi`, `shared-si+ff-nyq+ortho`, …) is a
+  specific experimental design. `loom` ships the `ConditionRegistry`
+  *type* and the `Condition.shared(...)` *constructor*; the canned
+  registry is demo code.
+- ❌ **Runner scripts.** `run_basin_study.py`, `run_followup_study.py`,
+  `run_sigma_probe.py`, `run_cifar_validate.py`, `run_probe.py` are
+  downstream consumers.
+
+### Where the demo code lives
+
+See §5 for the migration recommendation between (a) `loom/examples/`
+in this repo (uninstalled subdirectory) and (b) a separate
+`experiment/` repo that depends on `loom`. Spoiler: I recommend (b).
+
+### Why this scope is the right one
+
+The "FWS-adjacent work writes ~20 lines of glue" claim still stands —
+the glue is: define an `eqx.Module` target, define a `() -> TaskData`
+loader, build a `Condition`, call `train_multi_seed`. The reason `loom`
+must *not* own targets/loaders is exactly the §11 capacity-gap insight:
+every empirical claim in the monolith is conditional on a specific
+target architecture and dataset. Promoting one combination into the
+library would smuggle those design choices into every downstream
+consumer. The peer libraries (`rltrain`, `samgria`) learned this lesson
+already — `loom` inherits it.
+
+The `Condition` / `Encoding` / `Basis` triple are still top-level
+importable: `from loom import Condition, SIREN, Gaussian` works.
 
 ## 0. Anchoring vocabulary
 
@@ -77,30 +116,44 @@ imports.
 | `loom.encoding` | `Encoding` ABC, `Identity`, `Gaussian`, `GaussianPerLeaf`, `LearnedGaussian`, `Dyadic`, `nyquist_sigma` | — |
 | `loom.ortho` | `polar_orthogonalise` | — |
 | `loom.conditioning` | `LeafConditioning` (the per-leaf head + FiLM) | `encoding`, `config` |
-| `loom.renderer` | `LeafSlot`, `PerLeafSlot`, `SharedRenderer`, `PerLeafRenderer`, `DirectRenderer`, `Renderer` protocol, `virtualize`, `render` | `basis`, `conditioning`, `ortho`, `config` |
+| `loom.renderer` | `LeafSlot`, `PerLeafSlot`, `SharedRenderer`, `PerLeafRenderer`, `DirectRenderer`, `Renderer` protocol, `virtualize`, `render`, `is_weight`, `siren_in_dim_for`, `target_init_scale` | `basis`, `conditioning`, `ortho`, `config` |
 | `loom.condition` | `Topology`, `Condition`, `ConditionRegistry` | `basis`, `encoding`, `renderer`, `config` |
-| `loom.targets` | `FCHeavyCNN`, `IrisMLP`, `ResidualConvNet`, `DigitsCNN`, `CifarCNN`, `DigitsDeepCNN`, `CifarDeepCNN` | — |
-| `loom.tasks` | `TaskData`, `TaskCfg`, `TaskRegistry`, `load_digits`, `load_iris`, `load_cifar10` | `targets`, `config` |
-| `loom.training` | `RunResult`, `train_multi_seed`, `make_optimizer`, `clip_each_leaf` | `condition`, `tasks`, `diagnostics`, `config` |
+| `loom.target_protocol` | `Target` Protocol — what shape an `eqx.Module` must have to be renderable (rank-2/4 weights, bias detection rules) | — |
+| `loom.task_protocol` | `TaskData`, `TaskCfg`, `TaskRegistry`, `LossFn` Protocol | `target_protocol` |
+| `loom.training` | `RunResult`, `train_multi_seed`, `make_optimizer`, `clip_each_leaf` | `condition`, `task_protocol`, `diagnostics`, `config` |
 | `loom.diagnostics` | `cross_seed_cosine`, `group_grad_norms`, gradient-group labelling | `renderer` |
 | `loom.metrics` | `cross_entropy`, `accuracy`, `count_params` | — |
-| `loom.plotting` | `plot_run`, `plot_dynamics`, `summarize` | `condition`, `training` |
-| `loom.presets` | `default_conditions()`, `default_tasks()`, `default_renderer_config()` | every other module |
+| `loom.plotting` | `plot_run`, `plot_dynamics`, `summarize` (take `ConditionRegistry` + `RunResult` dict — no canned data) | `condition`, `training` |
 
-`loom/__init__.py` re-exports the same names the monolith currently surfaces
-to scripts, so a runner can do `from loom import train_multi_seed, ...`.
-Everything is also importable from the submodule for code that wants the
-narrower import.
+What's gone vs the previous draft: `loom.targets` (the FCHeavyCNN /
+IrisMLP / ResidualConvNet module), `loom.tasks` (the load_digits /
+load_cifar10 module), and `loom.presets` (the canned-condition /
+canned-task factory module). They migrate to the demo layer — see §5.
 
-### Why `presets` rather than module-level defaults
+`loom/__init__.py` exposes the value types and the training entry point
+at top level: `from loom import (Basis, SIREN, HSIREN, WIRE, Encoding,
+Identity, Gaussian, GaussianPerLeaf, LearnedGaussian, Dyadic,
+nyquist_sigma, Condition, ConditionRegistry, Topology, RendererConfig,
+TrainingConfig, TaskCfg, TaskData, train_multi_seed, RunResult, ...)`.
+Submodule paths exist for narrower imports.
 
-This is the single most important shape change. The monolith has
-`SIREN_HIDDEN`, `OMEGA_FIRST`, `S_INIT`, `NUM_SEEDS`, `DIGITS_STEPS`, …
-sitting at module scope. They are mutated implicitly by every probe script
-and cannot be varied per-run without monkey-patching. The capacity-sweep
-experiment (findings §11) requires `SIREN_HIDDEN`/`SIREN_LAYERS` to be a
-function argument, not a global. `loom.presets` is the only place a default
-value lives. Everywhere else a value is taken explicitly.
+### Why no `presets` module
+
+The monolith has `SIREN_HIDDEN`, `OMEGA_FIRST`, `S_INIT`, `NUM_SEEDS`,
+`DIGITS_STEPS`, …, *and* `CONDITIONS`, *and* `TASKS` all sitting at
+module scope. The previous draft consolidated the numeric defaults into
+a `RendererConfig` / `TrainingConfig` dataclass and the canned content
+into a `loom.presets` factory module. The narrower scope decision means
+**the canned content is gone** — `default_conditions()`, `default_tasks()`
+are demo concerns, not library concerns. The numeric defaults are now
+just the dataclass field defaults on `RendererConfig` / `TrainingConfig`
+themselves; no separate module is needed.
+
+The capacity-sweep requirement (findings §11) is satisfied at the
+library level by `RendererConfig(hidden=...)` being a constructor
+argument with a sensible default. Downstream code does
+`RendererConfig(hidden=48)` directly; no `loom.presets`
+indirection.
 
 ---
 
@@ -399,141 +452,165 @@ class ConditionRegistry(Mapping[str, Condition]):
 ```
 
 Decision: **`Condition` is a value object, `ConditionRegistry` is the
-container, `presets.default_conditions(cfg)` is where the 21-row table
-lives**. The monolith's module-level `CONDITIONS: dict[str, Condition]`
-dict gets *mutated* by `run_probe.py` via try/finally hacks; that's the
+container, and the canned 25-row table is demo code, not library code.**
+The monolith's module-level `CONDITIONS: dict[str, Condition]` dict
+gets *mutated* by `run_probe.py` via try/finally hacks; that's the
 single biggest source of action-at-a-distance bugs in the codebase. The
 registry is immutable; `select` and `filter` return new registries.
 
-### 2.8 `loom.targets`
+The pre-populated registry (`direct`, `per-leaf-si`, `shared-si`,
+`shared-hs`, `shared-w`, `shared-si+ortho`, …, `shared-w+ff-nyq+ortho`)
+encodes a specific experimental design — basis × encoding × ortho
+choices motivated by FWS hypotheses about coord-smoothness and
+spectral structure. It lives in the demo project (likely
+`experiment/conditions.py`), not in `loom`. `loom` provides the
+constructor `Condition.shared(...)` and the container
+`ConditionRegistry([...])`; building the canned set is one call to each
+in the demo project.
+
+### 2.8 `loom.target_protocol`
+
+The library defines *what shape a target must have*, not *what targets
+exist*. Concrete targets live downstream.
 
 ```python
-__all__ = ["FCHeavyCNN", "IrisMLP", "ResidualConvNet",
-           "DigitsCNN", "CifarCNN", "DigitsDeepCNN", "CifarDeepCNN",
-           "Target"]
+__all__ = ["Target", "TemplateFn"]
 
 class Target(Protocol):
-    """A target network template. Any `eqx.Module` constructible with a
-    `key=...` kwarg satisfies this protocol. There is no required base
-    class — this is structural typing, so user-defined targets compose
-    without subclassing anything from `loom`."""
-    def __init__(self, *, key: PRNGKeyArray, **kwargs: Any): ...
+    """The structural contract for a target network.
+
+    Any `eqx.Module` that:
+      - is constructed via `cls(*, key: PRNGKeyArray, ...)`
+      - is callable as `model(x: Array) -> Array`
+      - exposes its weights as a pytree where `is_weight(leaf)` correctly
+        identifies the renderable tensors (≥ 2 non-singleton dims;
+        rank-1 biases and rank-3 (C, 1, 1) broadcast biases are skipped)
+    satisfies this protocol. No subclassing required; structural typing.
+    """
+    def __init__(self, *, key: PRNGKeyArray) -> None: ...
     def __call__(self, x: Array) -> Array: ...
 
-class FCHeavyCNN(eqx.Module):
-    """Reference FC-heavy target. The renderer's hardest case (FC index-
-    permutation symmetry fights the coord-smoothness prior). Parameterised
-    on in_channels / in_size / conv_stride / hidden / n_classes."""
-class IrisMLP(eqx.Module):
-    """Reference tiny MLP target — rank-2 weights only."""
-class ResidualConvNet(eqx.Module):
-    """Reference all-conv target (SiLU residual blocks). Every learnable
-    weight is rank-4; the renderer's easiest case."""
-
-DigitsCNN = partial(FCHeavyCNN, in_channels=1, in_size=8, conv_stride=1)
-CifarCNN  = partial(FCHeavyCNN, in_channels=3, in_size=32, conv_stride=2)
-DigitsDeepCNN = partial(ResidualConvNet, in_channels=1, stem_stride=1)
-CifarDeepCNN  = partial(ResidualConvNet, in_channels=3, stem_stride=2)
+TemplateFn = Callable[..., Target]
+"""A template factory: usually a class, or a `functools.partial` of one.
+`TaskCfg.template_fn` is of this type."""
 ```
 
-**Extensibility contract.** Adding a new target architecture is one file
-+ one registry line:
+**Extensibility contract.** A downstream consumer defines its target
+once, plugs it into `TaskCfg.template_fn`:
 
 ```python
-# in user code (e.g. loom_transformer/targets.py)
-class SmallTransformer(eqx.Module):
-    def __init__(self, *, key, d_model=64, n_heads=4, depth=2): ...
+# in user code — e.g. experiment/targets.py or loom_transformer/targets.py
+import equinox as eqx, jax
+from loom import Target  # protocol — for static checks only
+
+class MyTarget(eqx.Module):
+    def __init__(self, *, key): ...
     def __call__(self, x): ...
 
-# in user code (e.g. loom_transformer/conditions.py)
-SmallTransformerPreset = partial(SmallTransformer, d_model=64, n_heads=4)
+# This is the contract. No registration, no plugin system, no
+# inheritance from anything in loom.
 ```
 
-The target satisfies the `Target` protocol structurally. It plugs into
-`TaskCfg.template_fn` directly — no registration with `loom`, no
-inheritance, no metaclass. The built-in targets are themselves just
-instances of this protocol; nothing about them is privileged.
+The bias-detection rules (rank-1 biases and `(C, 1, 1)` broadcast
+biases are *not* rendered) are properties of `is_weight` in
+`loom.renderer`, not of the `Target` protocol. The protocol just says
+"be a callable equinox module". The renderer's `is_weight` walks the
+target's pytree and decides per-leaf what's renderable.
 
-The reference targets stay in `loom.targets` because (a) they're the
-canonical examples of the protocol, (b) the monolith's experiments are
-the immediate consumer, (c) downstream FWS work on, e.g., a transformer
-renderer can extend / subclass them without re-implementing the bias-
-isn't-a-weight invariant. Class shapes and partials are unchanged from
-the monolith.
+### 2.9 `loom.task_protocol`
 
-### 2.9 `loom.tasks`
+The library defines *what a task looks like*, not *which tasks exist*.
+No dataset loaders, no scikit-learn dependency, no torchvision.
 
 ```python
-__all__ = ["TaskData", "TaskCfg", "TaskRegistry",
-           "load_digits", "load_iris", "load_cifar10"]
+__all__ = ["TaskData", "TaskCfg", "TaskRegistry", "Loader", "LossFn"]
 
 @dataclass(frozen=True, slots=True)
 class TaskData:
-    """A loaded dataset split. The contract: x is anything `template_fn`
-    accepts as input, y is integer labels. Any user-defined loader that
-    returns this shape plugs into `TaskCfg` directly."""
+    """A loaded dataset split. The contract: x is anything the target's
+    `__call__` accepts, y is integer class labels (for classification).
+    Any user-defined loader that returns this shape satisfies it."""
     xs_train: Float[Array, "n ..."]
     ys_train: Int[Array, "n"]
     xs_test: Float[Array, "m ..."]
     ys_test: Int[Array, "m"]
     name: str
 
+Loader = Callable[[], TaskData]
+"""A dataset loader — any callable returning `TaskData`. The library
+does not ship loaders; downstream code writes a `Loader` for whatever
+dataset it cares about (sklearn, torchvision, huggingface, fsspec,
+synthetic, …)."""
+
+LossFn = Callable[[Array, Array], Array]
+"""(logits, labels) → scalar loss. Defaults to cross-entropy in the
+training loop, but `TaskCfg` can override per task (e.g. MSE for
+regression targets)."""
+
 @dataclass(frozen=True, slots=True)
 class TaskCfg:
-    """The PRIMARY contract for 'a thing loom can train on'.
+    """THE primary contract for 'a thing loom can train on'.
 
-    A `TaskCfg` is a quintuple of (a name, a target template factory, a
-    data loader, a step budget, a batch size, a learning rate). Anything
-    callable that fits these slots works — the built-in `load_digits`
-    etc. are conveniences, not the contract.
+    A `TaskCfg` bundles:
+      - `name`         — display string
+      - `template_fn`  — a `TemplateFn` (target factory)
+      - `loader`       — a `Loader` (zero-arg → `TaskData`)
+      - `num_steps`    — training budget in optimiser steps
+      - `batch_size`   — minibatch size
+      - `lr`           — base learning rate (multi_transform group rates
+                         apply on top)
+      - `loss_fn`      — optional `LossFn` (defaults to cross-entropy)
 
-    Typical user code constructs `TaskCfg` directly:
-
-        TaskCfg("my-task", template_fn=MyTransformer,
-                loader=my_loader, num_steps=2000, batch_size=64, lr=1e-3)
+    Downstream code constructs `TaskCfg` directly. The library does not
+    own any concrete instance.
     """
     name: str
-    template_fn: Callable[..., eqx.Module]   # any Target-protocol factory
-    loader: Callable[[], TaskData]            # any () -> TaskData
+    template_fn: TemplateFn
+    loader: Loader
     num_steps: int
     batch_size: int
     lr: float
+    loss_fn: LossFn | None = None   # None → use library default (CE)
 
 class TaskRegistry(Mapping[str, TaskCfg]):
-    """Same shape as ConditionRegistry — ordered, immutable, .select / .filter."""
-    ...
-
-# Built-in convenience loaders. None of these are privileged — they're
-# reference implementations of the (() -> TaskData) contract.
-def load_digits(seed: int = 0) -> TaskData: ...
-def load_iris(seed: int = 0) -> TaskData: ...
-def load_cifar10(seed: int = 0, *, n_train: int = 1500,
-                 n_test: int = 400) -> TaskData: ...
+    """Same shape as ConditionRegistry — ordered, immutable,
+    `.select(keys)` / `.filter(pred)` return new registries.
+    Downstream code builds its own — `loom` ships no instance."""
+    def __init__(self, items: Iterable[TaskCfg]): ...
+    def select(self, keys: Iterable[str]) -> "TaskRegistry": ...
+    def filter(self, predicate: Callable[[TaskCfg], bool]) -> "TaskRegistry": ...
 ```
 
-**Extensibility contract.** Loading a new dataset is one function:
+**Extensibility contract.** Loading a dataset is a function the user
+writes:
 
 ```python
-# in user code
+# in user code — e.g. experiment/tasks.py
+from sklearn import datasets
+from sklearn.model_selection import train_test_split
+from loom import TaskData, TaskCfg
+from my_targets import MyTarget   # user-defined, see §2.8
+
 def load_my_dataset(seed: int = 0) -> TaskData:
-    xs, ys = ...   # whatever (numpy, torch, fsspec, huggingface) you want
-    return TaskData(xs_train=..., ys_train=..., xs_test=..., ys_test=...,
-                    name="my-dataset")
+    d = datasets.load_digits()
+    X, y = d.data.astype("float32") / 16.0, d.target.astype("int32")
+    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2,
+                                          random_state=seed, stratify=y)
+    return TaskData(jnp.asarray(Xtr), jnp.asarray(ytr),
+                    jnp.asarray(Xte), jnp.asarray(yte), "my-digits")
 
 task = TaskCfg("my-task", template_fn=MyTarget, loader=load_my_dataset,
                num_steps=2000, batch_size=64, lr=1e-3)
-res  = train_multi_seed(my_cond, task, ...)
 ```
 
-No registration, no plugin system, no `loom`-side opt-in. The
-`Callable[[], TaskData]` shape *is* the contract.
+No `pip install loom` opt-in for sklearn, torchvision, or any specific
+dataset. The `Callable[[], TaskData]` shape *is* the contract — and
+that contract makes zero assumptions about how the data was loaded.
 
-The monolith's module-level `TASKS = [...]` list is replaced by the
-`TaskRegistry` returned from `loom.presets.default_tasks()` — that
-registry is the *built-in* set; downstream projects compose their own
-the same way (`TaskRegistry([digits_cfg, my_cfg])`). CIFAR caching
-becomes a `functools.lru_cache` on `load_cifar10`, not a module-level
-`_CIFAR_CACHE` dict.
+The monolith's `_CIFAR_CACHE` dict and the `TASKS = [...]` list both
+disappear from the library entirely. The CIFAR cache becomes a
+`functools.lru_cache` on whatever loader the demo project writes —
+that's not a `loom` concern.
 
 ### 2.10 `loom.training`
 
@@ -580,22 +657,22 @@ explicitly, never the module-level `CONDITIONS`. `summarize` returns a
 `pandas.DataFrame` instead of just printing — printing is the caller's
 job.
 
-### 2.12 `loom.presets`
+### 2.12 (removed)
 
-```python
-__all__ = ["default_renderer_config", "default_training_config",
-           "default_conditions", "default_tasks"]
+The previous draft had a `loom.presets` module owning
+`default_renderer_config()` / `default_training_config()` /
+`default_conditions()` / `default_tasks()`. The narrower-scope decision
+drops it entirely:
 
-def default_renderer_config() -> RendererConfig: ...     # the 24/2/6.0/1.0/3.0 defaults
-def default_training_config() -> TrainingConfig: ...     # 5 seeds, eval_every=25, ...
-def default_conditions(cfg: RendererConfig | None = None) -> ConditionRegistry: ...
-def default_tasks() -> TaskRegistry: ...
-```
-
-`default_conditions` is the canonical home for the 21-row condition table.
-A script that wants a probe subset writes
-`default_conditions().select(["direct", "shared-si+ff-pi"])` — no module
-mutation.
+- Numeric defaults are dataclass field defaults on `RendererConfig` /
+  `TrainingConfig`. Callers write `RendererConfig()` or
+  `RendererConfig(hidden=48)`; there is no factory function to wrap
+  this.
+- `default_conditions()` and `default_tasks()` were canned content
+  (specific FWS experimental design + sklearn/torchvision-coupled
+  data). They become demo-project concerns. The downstream
+  `experiment/` repo writes its own `conditions.py` and `tasks.py`
+  that build a `ConditionRegistry` / `TaskRegistry`.
 
 ---
 
@@ -603,32 +680,47 @@ mutation.
 
 | Monolith global | Replacement | Where it lives |
 |---|---|---|
-| `SIREN_HIDDEN`, `SIREN_LAYERS`, `OMEGA_FIRST`, `OMEGA_HIDDEN`, `S_INIT` | `RendererConfig` fields | `loom.config`; default in `loom.presets.default_renderer_config()` |
-| `NUM_SEEDS`, `EVAL_EVERY`, `LR_MULT`, `SLOW_NAMES`, `PER_LEAF_GRAD_CAP` | `TrainingConfig` fields | `loom.config`; default in `loom.presets.default_training_config()` |
-| `DIGITS_STEPS`, `IRIS_STEPS`, `DIGITS_BATCH`, `IRIS_BATCH` | Per-task `TaskCfg` fields | `loom.presets.default_tasks()` |
-| `CONDITIONS: dict[str, Condition]` (mutable!) | `ConditionRegistry` (immutable Mapping) | `loom.presets.default_conditions()` |
-| `TASKS: list[TaskCfg]` | `TaskRegistry` | `loom.presets.default_tasks()` |
+| `SIREN_HIDDEN`, `SIREN_LAYERS`, `OMEGA_FIRST`, `OMEGA_HIDDEN`, `S_INIT` | `RendererConfig` field defaults | `loom.config` |
+| `NUM_SEEDS`, `EVAL_EVERY`, `LR_MULT`, `SLOW_NAMES`, `PER_LEAF_GRAD_CAP` | `TrainingConfig` field defaults | `loom.config` |
+| `DIGITS_STEPS`, `IRIS_STEPS`, `DIGITS_BATCH`, `IRIS_BATCH` | Per-task `TaskCfg` fields, set by the consumer | downstream demo project (`experiment/`) |
+| `CONDITIONS: dict[str, Condition]` (mutable!) | `ConditionRegistry` *type* in `loom`; the canned 25-row instance lives downstream | type: `loom.condition`; instance: `experiment/conditions.py` |
+| `TASKS: list[TaskCfg]` | `TaskRegistry` *type* in `loom`; the canned instance lives downstream | type: `loom.task_protocol`; instance: `experiment/tasks.py` |
 | `BASIS_KINDS = ("siren", "hsiren", "wire")` | Subclass set in `loom.basis` | `loom.basis` |
 | `MASTER_SEED = 42` | `Final[int]` in `loom.config` | `loom.config` |
-| `_CIFAR_CACHE: dict[str, TaskData]` | `functools.lru_cache(maxsize=4)` on `load_cifar10` | `loom.tasks` |
+| `_CIFAR_CACHE: dict[str, TaskData]` | `functools.lru_cache` on the downstream loader | `experiment/tasks.py` |
 | `GROUP_ORDER = ("main", "slow")` | Static method on `TrainingConfig` | `loom.config` |
-| `DYNAMICS_CONDITION_SUBSET` | Callers pass it via `.select(...)` | gone from `loom`; lives in scripts |
+| `DYNAMICS_CONDITION_SUBSET` | Callers pass it via `.select(...)` | downstream scripts |
+| `FCHeavyCNN`, `IrisMLP`, `ResidualConvNet`, `DigitsCNN`, … | Concrete `eqx.Module`s satisfying `Target` protocol | downstream demo project (`experiment/targets.py`) |
+| `load_digits`, `load_iris`, `load_cifar10` | Concrete loaders satisfying the `Loader` protocol | downstream demo project (`experiment/tasks.py`) |
 
 The probe scripts' `try: CONDITIONS["x"] = ...; finally: CONDITIONS["x"] = old`
-pattern is structurally impossible after the refactor. The capacity sweep
-becomes:
+pattern is structurally impossible after the refactor (the registry is
+immutable). The capacity sweep — pure-library code — reads:
 
 ```python
+from loom import (Condition, ConditionRegistry, SIREN, GaussianPerLeaf,
+                  RendererConfig, TrainingConfig, train_multi_seed)
+from experiment.targets import DigitsCNN
+from experiment.tasks   import digits_task           # a TaskCfg
+from experiment.conditions import nyquist_sigma      # or loom.encoding
+
+results = {}
 for hidden in (12, 16, 24, 48, 96):
-    cfg = default_renderer_config().with_(hidden=hidden)
-    cond = Condition.shared("shared-si+ff-nyq+ortho", "#fb8072",
-                            basis=SIREN(), encoding=GaussianPerLeaf(nyquist_sigma),
-                            ortho=True)
-    res[hidden] = train_multi_seed(cond, digits_task,
-                                   renderer_cfg=cfg, training_cfg=tcfg)
+    cfg = RendererConfig(hidden=hidden)
+    cond = Condition.shared(
+        "shared-si+ff-nyq+ortho", "#fb8072",
+        basis=SIREN(), encoding=GaussianPerLeaf(nyquist_sigma),
+        ortho=True,
+    )
+    results[hidden] = train_multi_seed(
+        cond, digits_task,
+        renderer_cfg=cfg, training_cfg=TrainingConfig(),
+    )
 ```
 
-That's the §11 capacity-sweep requirement satisfied at the API level.
+That's the §11 capacity-sweep requirement, satisfied at the API level,
+with `loom` carrying the renderer machinery and the demo project
+carrying the target + dataset choices.
 
 ---
 
@@ -677,67 +769,108 @@ adapter code.
 
 ## 5. Migration strategy
 
-**Recommended: Option B' — port-then-shim, single PR per ported module,
-delete the monolith in one final PR, then split runner scripts between
-`loom/examples/` (demos) and `experiment/` (the active FWS consumer).**
+**Recommended: port machinery into `loom`; then split the monolith's
+demo content between `experiment/` (downstream consumer) and
+`loom/examples/` (tiny canonical demos). Recommend the `experiment/`
+side become a separate repository depending on `loom`.**
 
-Why not Option A (port everything alongside, kill `experiment/` in one
-PR): the monolith is 1415 lines with eight runner scripts, an analysis
-notebook, and a CHANGELOG that traces specific functions by name. One
-mega-PR has too much surface area to review carefully, and bisecting a
+Why not "port everything alongside, kill `experiment/` in one PR": the
+monolith is 1415 lines with eight runner scripts, an analysis notebook,
+and a CHANGELOG that traces specific functions by name. One mega-PR
+has too much surface area to review carefully, and bisecting a
 regression against a single squash commit is painful.
 
-Why not strict Option B (keep `experiment/` as a thin shim forever):
-shims that stay around become load-bearing. The `finish-what-you-break`
-rule says you must commit to deleting them.
+Why not "keep `experiment/` as a thin shim forever": shims that stay
+around become load-bearing. The `finish-what-you-break` rule says you
+must commit to deleting them.
 
 The chosen strategy:
 
-1. **Port modules bottom-up**, in dependency order: `config`, `basis`,
-   `encoding`, `ortho`, `conditioning`, `renderer`, `targets`, `tasks`,
-   `condition`, `presets`, `diagnostics`, `metrics`, `training`,
-   `plotting`. Each module ships with its own tests (functions and
-   classes have unit-level tests; renderer composition has integration
-   tests against monolith output on `master_seed=42`).
+1. **Port machinery modules bottom-up**, in dependency order: `config`,
+   `basis`, `encoding`, `ortho`, `conditioning`, `renderer`,
+   `target_protocol`, `task_protocol`, `condition`, `diagnostics`,
+   `metrics`, `training`, `plotting`. **Concrete targets, loaders, and
+   the canned condition table are NOT ported into `loom`**; they go
+   straight to the demo project. Each ported module ships with its own
+   tests; renderer composition has integration tests against monolith
+   output on `master_seed=42`.
+
 2. **`experiment/experiment.py` becomes a re-export shim after each
    module ports**, so existing runner scripts (`run_probe.py`,
-   `run_basin_study.py`, etc.) keep working *unchanged*. The shim's job
-   is two-fold: route old names to new locations, and route old
-   condition-key strings to new ones.
+   `run_basin_study.py`, etc.) keep working *unchanged* during the
+   migration. The shim's job is two-fold: route old names to new
+   locations (e.g. `from experiment import polar_orthogonalise` →
+   `from loom import polar_orthogonalise`), and host the still-
+   downstream content (target classes, loaders, the canned
+   `CONDITIONS` registry) without claiming any of it lives in `loom`.
+
 3. **Numerical equivalence test on `master_seed=42`** runs after every
-   port: the new code, given the same `Condition` and `TaskCfg`, must
-   produce a bit-identical `RunResult` to the monolith. This is the
-   convergence criterion for each port.
-4. **Final library PR deletes `experiment/experiment.py` and the
-   shim.** At this point `loom` is a self-contained library installable
-   via `pip install loom`. The CHANGELOG entry for this PR is an
-   inventory of what moved where.
-5. **Post-port: split runner scripts into two destinations.**
+   machinery port: the new `loom` code, given the same `Condition` /
+   `TaskCfg` (loaded via the shim's still-monolithic loaders), must
+   produce a bit-identical `RunResult` to the pre-port monolith. This
+   is the convergence criterion for each machinery port.
 
-   - **Two or three become canonical `loom/examples/`** — small,
-     self-contained demos that exercise the library's surface area
-     (e.g. `examples/single_condition.py` — train one condition on
-     digits; `examples/capacity_sweep.py` — the §11 sweep; perhaps
-     `examples/custom_target.py` — show how downstream code adds a new
-     target). These are the docs-as-code surface for new users.
-   - **The rest stay in `experiment/`** as the active FWS-specific
-     consumer of `loom`. That directory becomes a peer project:
-     `experiment/pyproject.toml` lists `loom` as a dependency, the
-     runner scripts import from `loom`, the npz files and research
-     notes live alongside. `samgria`, `rltrain`, future
-     `loom_transformer`, etc. follow the same shape — they're
-     downstream consumers, not library code.
+4. **Migration-finale PR** — delete `experiment/experiment.py` (the
+   shim), and split its contents into:
 
-   The split criterion is reusability: if a script demonstrates a
-   library feature in ≤ 100 lines and would help a new user, it goes
-   in `examples/`. If a script encodes a specific FWS experimental
-   design (basin study with n=30, σ sweeps, CIFAR validation), it
-   stays in `experiment/`. Default to `experiment/` when in doubt.
+   - **`experiment/targets.py`** — `FCHeavyCNN`, `IrisMLP`,
+     `ResidualConvNet`, `DigitsCNN`, `CifarCNN`, `DigitsDeepCNN`,
+     `CifarDeepCNN`.
+   - **`experiment/tasks.py`** — `load_digits`, `load_iris`,
+     `load_cifar10` (with their `functools.lru_cache`), and the
+     canned `TaskRegistry`.
+   - **`experiment/conditions.py`** — the 25-row pre-populated
+     `ConditionRegistry`, plus `nyquist_sigma` IF it stays domain-
+     specific (open question: it's currently in `loom.encoding`; it
+     may belong in the demo).
+   - **`experiment/run_*.py`** — runners imported from above + `loom`,
+     unchanged in essence.
+
+   At this point `pip install loom` installs only the machinery.
+   `experiment/` is a sibling that depends on `loom`.
+
+5. **Recommendation: make `experiment/` a separate repository.**
+   The peer libraries (`samgria`, `rltrain`, `xptrack`) live in
+   separate repos; the demo project for `loom` should too. Reasons:
+
+   - **Dependency boundary clarity.** `experiment/` depends on
+     sklearn and torchvision; `loom` depends only on JAX/Equinox/
+     Optax. Keeping them in one repo invites accidental imports
+     across the boundary. A separate repo's `pyproject.toml`
+     enforces this physically.
+   - **Independent release cadence.** Empirical experiments move
+     fast (a new study every few days); the library should move
+     slowly (semver, breakage matters). Different repos = different
+     release cycles.
+   - **Future-proofing the multi-consumer claim.** When a
+     `loom_transformer` or `loom_rl_policy` consumer appears, the
+     existing pattern is already "depend on `loom`, live in your
+     own repo". One demo-in-loom-repo would be the odd one out.
+
+   Alternative: keep `experiment/` as a subdirectory in this repo
+   marked uninstalled (`pyproject.toml` excludes it from the package
+   wheel). Lower migration cost, but it's the wrong long-term shape
+   per the reasons above. Default to a separate repo.
+
+6. **Tiny canonical `loom/examples/`.** Two or three scripts, each
+   < 100 lines, exercising the library surface with a *trivial*
+   target and *synthetic* data (random tensors with a known
+   factorisation, say). These exist for documentation, not for
+   experiments. Examples:
+
+   - `examples/render_a_weight.py` — virtualise a single `eqx.nn.Linear`,
+     render it, show the shape and norm.
+   - `examples/capacity_sweep_synthetic.py` — the §11 sweep on a
+     toy MLP with random data; demonstrates the API.
+   - `examples/custom_basis.py` — define a new `Basis` subclass.
+
+   These are *not* the digits/iris/CIFAR studies. Those move to
+   `experiment/`.
 
 The migration owns one Trello card per ported module (so the wave-
 execution rules apply: narrow ports first, broader ports last,
 `condition` and `training` last because they pull every other module
-together). Steps 4 and 5 are separate cards.
+together). Steps 4, 5, and 6 are separate cards.
 
 ---
 
@@ -756,9 +889,6 @@ Locked-in invariants that this design preserves without comment:
 - **`master_seed=42` determinism contract.** Identical seed → identical
   `RunResult` byte-for-byte. The whole capacity-sweep methodology
   depends on this.
-- **The eight-condition naming convention** (`shared-si`, `shared-hs`,
-  `shared-w`, `+ortho`, `+ff-pi`, …). New code uses the same key
-  strings so historical `.npz` files stay readable.
 - **`is_weight` rule.** A leaf with ≥ 2 non-singleton dims is a weight;
   everything else stays a direct trainable param.
 - **The "subtract per-coord mean before applying `out_scale`" step.**
@@ -802,24 +932,39 @@ refactor.
 4. **`Encoding.materialise(rank, key)` vs `Encoding.__init__`
    accepting `rank` and `key` directly.** I picked `materialise` because
    `Gaussian(sigma=π)` reads like a spec (no PRNG) and the spec is what
-   appears in the condition registry. The alternative — make every
-   `Encoding` instance carry its sampled `B` even at the registry level
-   — would require deferring all registry construction until a PRNG is
-   available, which makes `default_conditions()` take a `key` argument.
+   appears in a downstream condition registry. The alternative — make
+   every `Encoding` instance carry its sampled `B` even at the spec
+   level — would require deferring all registry construction until a
+   PRNG is available, which would force every downstream
+   `conditions.py` to take a `key` argument at module import time.
    I'd rather pay the explicit `materialise` call.
 
 5. **`pandas` dependency for `summarize`.** Returning a DataFrame
    instead of printing is cleaner, but pulls pandas in. Alternative:
    return a list of `dataclass`-typed rows and let the caller format.
-   I lean DataFrame; flag for confirmation.
+   I lean DataFrame; flag for confirmation. (If we say no, `plotting`
+   stays pure-matplotlib and the summary is a list of dataclasses.)
 
-6. **Lazy CIFAR-10 import.** The monolith imports torchvision lazily
-   inside `_load_cifar10_arrays`. I want to keep that — torchvision is a
-   heavy dep and digits/iris users shouldn't pay for it. Confirm the
-   `loom.tasks.load_cifar10` signature is allowed to do `import
-   torchvision` inside its body.
+6. **Where does `nyquist_sigma` live?** It's a small pure function
+   `(shape: tuple[int, ...]) -> float` that gives a Tancik-style σ for
+   Gaussian encoding from a weight tensor's shape. Two homes:
+   (a) `loom.encoding` — it parameterises a `GaussianPerLeaf` and is
+   the canonical example of a `sigma_rule`; (b) downstream demo —
+   it's domain-specific to the FWS index-grid analysis. I lean (a)
+   because it's pure, tiny, and demonstrates the `sigma_rule`
+   contract; the alternative argument is that "Tancik-style σ from
+   Nyquist analysis" is an FWS-flavoured *choice*, not machinery.
 
-7. **`Basis.init_params` returning a tuple of scalars.** Slightly
+7. **Should `loom` preserve the monolith's condition-key naming
+   convention** (`shared-si`, `shared-hs+ff-pi`, …) as documented
+   guidance for downstream registries? Historical `.npz` files use
+   those keys. The library itself doesn't care — it never instantiates
+   those names — but the migration matters: the demo project
+   (`experiment/`) needs to keep them so old artefacts stay readable.
+   I'd treat this as a downstream convention, mentioned in `loom`'s
+   examples but not enforced.
+
+8. **`Basis.init_params` returning a tuple of scalars.** Slightly
    awkward — WIRE has both `omega_init` and `s_init`, SIREN/HSIREN only
    use `omega`. The pytree-uniformity constraint (so vmap works across
    `BasisLayer`s of different bases — though we don't currently mix
@@ -836,76 +981,87 @@ refactor.
 Here's the entire user-facing surface of `loom` as a runnable script.
 If this isn't readable in 30 seconds the design has failed.
 
-### 8a. The 30-second example — using the built-in target
+### 8a. The 20-line glue example — bringing your own target + dataset
+
+The library-positioning claim ("downstream work writes ~20 lines of
+glue, not a fork"). Since `loom` ships no concrete targets or loaders,
+this *is* the minimum example — there is no "built-in" path.
 
 ```python
 import math
+import equinox as eqx
+import jax.numpy as jnp
+from jaxtyping import Array, PRNGKeyArray
+from sklearn.datasets import load_digits as sk_load_digits
+from sklearn.model_selection import train_test_split
+
 from loom import (
-    Condition, SIREN, GaussianPerLeaf, nyquist_sigma,
-    TaskCfg, DigitsCNN, load_digits,
+    Condition, SIREN, Gaussian,
+    TaskCfg, TaskData,
     train_multi_seed, RendererConfig, TrainingConfig,
 )
 
-cond = Condition.shared(
-    "shared-si+ff-nyq+ortho", color="#fb8072",
-    basis=SIREN(omega_init=6.0),
-    encoding=GaussianPerLeaf(nyquist_sigma),
-    ortho=True,
-)
+class MyTarget(eqx.Module):
+    # any eqx.Module taking key=...; satisfies loom's Target protocol.
+    def __init__(self, *, key: PRNGKeyArray): ...
+    def __call__(self, x: Array) -> Array: ...
 
-task = TaskCfg(
-    name="digits-cnn", template_fn=DigitsCNN, loader=load_digits,
-    num_steps=1500, batch_size=128, lr=3e-3,
-)
+def my_loader(seed: int = 0) -> TaskData:
+    d = sk_load_digits()
+    X = (d.data.astype("float32") / 16.0).reshape(-1, 1, 8, 8)
+    Xtr, Xte, ytr, yte = train_test_split(X, d.target.astype("int32"),
+                                          test_size=0.2, random_state=seed,
+                                          stratify=d.target)
+    return TaskData(jnp.asarray(Xtr), jnp.asarray(ytr),
+                    jnp.asarray(Xte), jnp.asarray(yte), "digits")
 
-res = train_multi_seed(
-    cond, task,
-    renderer_cfg=RendererConfig(hidden=48),   # capacity knob (§11)
-    training_cfg=TrainingConfig(),
-)
+cond = Condition.shared("siren+ff-pi", color="#1b9e77",
+                        basis=SIREN(omega_init=6.0),
+                        encoding=Gaussian(sigma=math.pi))
+task = TaskCfg("digits", MyTarget, my_loader,
+               num_steps=1500, batch_size=128, lr=3e-3)
+res  = train_multi_seed(cond, task,
+                        renderer_cfg=RendererConfig(hidden=48),  # capacity knob (§11)
+                        training_cfg=TrainingConfig())
 
 print(f"{res.n_params=}, test_acc={res.eval_curves[:, -1, 1].mean():.3f}")
 ```
 
-### 8b. The 20-line glue example — bringing your own target + dataset
+Zero subclassing of anything in `loom`. The target is a plain
+`eqx.Module`; the loader is a plain function. sklearn is a downstream
+dependency, not a library one. The library only owns the renderer, the
+condition algebra, the training loop, and the protocol types — every
+domain-specific choice is in user code.
 
-The library-positioning claim ("FWS-adjacent work writes ~20 lines of
-glue, not a fork"). This is what those 20 lines look like:
+### 8b. The capacity sweep — pure-library code
 
 ```python
-import equinox as eqx
-from jaxtyping import Array, PRNGKeyArray
-from loom import (Condition, SIREN, Gaussian, TaskCfg, TaskData,
-                  train_multi_seed, RendererConfig, TrainingConfig)
+from loom import (Condition, SIREN, GaussianPerLeaf,
+                  RendererConfig, TrainingConfig, train_multi_seed)
+from loom.encoding import nyquist_sigma            # (or moved downstream — see Q6)
+# downstream:
+from experiment.targets import DigitsCNN
+from experiment.tasks   import digits_task          # a TaskCfg
 
-class TinyTransformer(eqx.Module):
-    # ... any eqx.Module accepting `key=...`. Satisfies loom's Target protocol.
-    def __init__(self, *, key: PRNGKeyArray): ...
-    def __call__(self, x: Array) -> Array: ...
-
-def load_my_data(seed: int = 0) -> TaskData:
-    # ... return TaskData(xs_train=..., ys_train=..., xs_test=..., ys_test=...,
-    #                     name="my-dataset")
-    ...
-
-cond = Condition.shared("transformer-siren+ff-pi", color="#1b9e77",
-                        basis=SIREN(), encoding=Gaussian(sigma=math.pi))
-task = TaskCfg("my-task", TinyTransformer, load_my_data,
-               num_steps=2000, batch_size=64, lr=1e-3)
-res = train_multi_seed(cond, task,
-                       renderer_cfg=RendererConfig(),
-                       training_cfg=TrainingConfig())
+results = {}
+for hidden in (12, 16, 24, 48, 96):
+    cond = Condition.shared(
+        "shared-si+ff-nyq+ortho", color="#fb8072",
+        basis=SIREN(), encoding=GaussianPerLeaf(nyquist_sigma),
+        ortho=True,
+    )
+    results[hidden] = train_multi_seed(
+        cond, digits_task,
+        renderer_cfg=RendererConfig(hidden=hidden),
+        training_cfg=TrainingConfig(),
+    )
 ```
-
-Zero subclassing of anything in `loom`. The target is a plain
-`eqx.Module`; the loader is a plain function. The library only owns the
-renderer, the condition algebra, and the training loop — everything
-else plugs in by protocol.
 
 No globals. No mutations. No `kind=` strings. One config object per concern.
 Body capacity is a function argument. Adding a new basis/encoding/ortho
 combination is one `Condition.shared(...)` line. Adding a new target or
-dataset is a class and a function.
+dataset is one `eqx.Module` and one `Callable[[], TaskData]`, both in
+downstream code. The library never sees them.
 
 ---
 
