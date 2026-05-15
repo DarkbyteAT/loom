@@ -1,11 +1,11 @@
-# PACKAGE_NAME
+# loom
 
-PACKAGE_DESCRIPTION
+Implicit neural renderer for parameterising neural network weights as low-dimensional manifolds
 
 ## Installation
 
 ```bash
-pip install PACKAGE_NAME
+pip install loom
 ```
 
 ## License
