@@ -24,3 +24,7 @@ convention = "google"
 # Test functions are self-documenting through Given-When-Then structure and
 # descriptive test names; D rules don't add value here.
 "tests/**" = ["D"]
+# Each example has a top-of-file docstring that explains the pattern and its
+# FWS-side relevance; requiring docstrings on inner helpers (main, __init__)
+# would just add noise.
+"examples/**" = ["D"]
