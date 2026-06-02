@@ -60,6 +60,15 @@ class RenderError(Exception):
         """Render the path-pointing failure message."""
         return f"render failed at leaf {_format_path(self.path)} (expected shape={self.shape}, dtype={self.dtype})"
 
+    def __reduce__(self) -> tuple[Any, tuple[Any, ...]]:
+        """Support cross-process serialisation of the exception itself.
+
+        Needed when JAX raises this error inside a worker process (e.g.
+        multi-host runs) and the driver re-raises it. Without this, the
+        custom `__init__` signature breaks default reconstruction.
+        """
+        return (self.__class__, (self.path, self.shape, self.dtype))
+
 
 class ShapeMismatch(RenderError):
     """`f` returned an array whose shape disagrees with the leaf's shape.
@@ -90,6 +99,10 @@ class ShapeMismatch(RenderError):
             f"f returned shape={self.actual_shape}, expected shape={self.shape}"
         )
 
+    def __reduce__(self) -> tuple[Any, tuple[Any, ...]]:
+        """Override base `__reduce__` to carry the 4-arg signature."""
+        return (self.__class__, (self.path, self.shape, self.actual_shape, self.dtype))
+
 
 class DTypeMismatch(RenderError):
     """`f` returned an array whose dtype disagrees with the leaf's dtype.
@@ -119,3 +132,7 @@ class DTypeMismatch(RenderError):
             f"dtype mismatch at leaf {_format_path(self.path)}: "
             f"f returned dtype={self.actual_dtype}, expected dtype={self.dtype}"
         )
+
+    def __reduce__(self) -> tuple[Any, tuple[Any, ...]]:
+        """Override base `__reduce__` to carry the 4-arg signature."""
+        return (self.__class__, (self.path, self.shape, self.dtype, self.actual_dtype))

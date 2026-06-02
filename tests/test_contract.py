@@ -277,3 +277,39 @@ def test_non_array_return_raises_render_error(value: Any, type_name: str):
     cause = exc_info.value.__cause__
     assert isinstance(cause, TypeError)
     assert type_name in str(cause)
+
+
+# --- Serialisation: error hierarchy survives cross-process round-trip -----
+
+
+def test_render_errors_survive_cross_process_serialisation():
+    """Exceptions must round-trip via the standard reconstruction protocol so
+    JAX worker -> driver re-raise (multi-host / multiprocessing) works.
+    """
+    import pickle  # noqa: S403 -- exception reconstruction, not data deserialisation
+
+    # Given: one instance of each error type with realistic context
+    path = (jax.tree_util.GetAttrKey("w"),)
+    base = RenderError(path, (3, 4), jnp.float32)
+    shape_err = ShapeMismatch(path, (3, 4), (7,), jnp.float32)
+    dtype_err = DTypeMismatch(path, (3, 4), jnp.float32, jnp.float64)
+
+    # When: each is round-tripped through the serialisation protocol
+    for original in (base, shape_err, dtype_err):
+        revived = pickle.loads(pickle.dumps(original))  # noqa: S301 -- round-trip of our own class
+
+        # Then: type, attributes, and rendered message all survive
+        assert type(revived) is type(original)
+        assert revived.path == original.path
+        assert revived.shape == original.shape
+        assert revived.dtype == original.dtype
+        assert str(revived) == str(original)
+
+    # And: subclass-specific attributes survive too
+    revived_shape = pickle.loads(pickle.dumps(shape_err))  # noqa: S301
+    assert isinstance(revived_shape, ShapeMismatch)
+    assert revived_shape.actual_shape == (7,)
+
+    revived_dtype = pickle.loads(pickle.dumps(dtype_err))  # noqa: S301
+    assert isinstance(revived_dtype, DTypeMismatch)
+    assert revived_dtype.actual_dtype == jnp.float64
