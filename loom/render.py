@@ -71,15 +71,20 @@ def render(P: Any, f: RenderFn, params: Any) -> Any:
         expected_dtype = leaf.dtype
         try:
             out = f(path, expected_shape, expected_dtype, params)
+            if not hasattr(out, "shape") or not hasattr(out, "dtype"):
+                raise TypeError(
+                    f"f returned a non-array value of type {type(out).__name__!r}; "
+                    f"expected a jax.Array with shape={expected_shape}, dtype={expected_dtype}"
+                )
+            actual_shape = tuple(out.shape)
+            if actual_shape != expected_shape:
+                raise ShapeMismatch(path, expected_shape, actual_shape, expected_dtype)
+            if out.dtype != expected_dtype:
+                raise DTypeMismatch(path, expected_shape, expected_dtype, out.dtype)
         except RenderError:
             raise
         except Exception as e:
             raise RenderError(path, expected_shape, expected_dtype) from e
-        actual_shape = tuple(out.shape)
-        if actual_shape != expected_shape:
-            raise ShapeMismatch(path, expected_shape, actual_shape, expected_dtype)
-        if out.dtype != expected_dtype:
-            raise DTypeMismatch(path, expected_shape, expected_dtype, out.dtype)
         return out
 
     return jax.tree_util.tree_map_with_path(render_leaf, P)
