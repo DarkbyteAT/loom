@@ -23,9 +23,13 @@ dependencies = [
     "jaxtyping>=0.3.9",
     "matplotlib>=3.10.9",
     "numpy>=2.4.4",
+    "ondes",
     "optax>=0.2.8",
     "scikit-learn>=1.8.0",
 ]
+
+[tool.uv.sources]
+ondes = { path = "../ondes", editable = true }
 
 [dependency-groups]
 dev = [
