@@ -76,7 +76,7 @@ def main() -> None:
 
     def task_loss(rendered_target: eqx.Module) -> jax.Array:
         full = eqx.combine(rendered_target, passthrough)
-        y_pred = jax.vmap(full)(x_batch)
+        y_pred = jax.vmap(lambda x: full(x))(x_batch)
         return jnp.mean((y_pred - y_target) ** 2)
 
     def task_loss_of(p):
