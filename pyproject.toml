@@ -28,8 +28,11 @@ dependencies = [
     "scikit-learn>=1.8.0",
 ]
 
+# For local co-development against a checkout of ondes, swap this for:
+#   ondes = { path = "../ondes", editable = true }
+# Refresh after switching with `uv sync --reinstall`.
 [tool.uv.sources]
-ondes = { path = "../ondes", editable = true }
+ondes = { git = "https://github.com/DarkbyteAT/ondes.git" }
 
 [dependency-groups]
 dev = [
