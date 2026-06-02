@@ -24,3 +24,7 @@ convention = "google"
 # Test functions are self-documenting through Given-When-Then structure and
 # descriptive test names; D rules don't add value here.
 "tests/**" = ["D"]
+# Example scripts are walk-throughs whose top-level docstrings carry the
+# explanation; inner methods (TinyMLP.__init__, __call__, main) are
+# demonstration scaffolding, not API.
+"examples/**" = ["D"]
