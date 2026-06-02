@@ -41,14 +41,24 @@ import ondes
 import loom
 
 
-def _is_conv_path(path: tuple) -> bool:
-    """True if any KeyPath part is a `GetAttrKey` whose name starts with 'conv'.
+def _attr_starts_with(path: tuple, prefix: str) -> bool:
+    """True if any KeyPath part is a `GetAttrKey` whose name starts with `prefix`.
 
     Pattern-matching on `GetAttrKey.name` is more robust than substring-checking
     the rendered key-string — it can't false-positive on a dict key or sequence
-    index that happens to contain "conv".
+    index that happens to contain the prefix.
     """
-    return any(isinstance(k, jax.tree_util.GetAttrKey) and k.name.startswith("conv") for k in path)
+    return any(isinstance(k, jax.tree_util.GetAttrKey) and k.name.startswith(prefix) for k in path)
+
+
+def _is_conv_path(path: tuple) -> bool:
+    """Conv-branch predicate: any attribute key starts with "conv"."""
+    return _attr_starts_with(path, "conv")
+
+
+def _is_fc_path(path: tuple) -> bool:
+    """FC-branch predicate: any attribute key starts with "fc"."""
+    return _attr_starts_with(path, "fc")
 
 
 class TinyConvNet(eqx.Module):
@@ -100,6 +110,11 @@ def main() -> None:
     # order is unspecified and `f` may be traced/transformed, so any side
     # effect inside `f` is undefined behaviour. Branch tracking for the
     # report is recovered separately from `renderable`'s paths below.
+    #
+    # Dispatch is *exhaustive*: each predicate is explicit and any unmapped
+    # path raises `KeyError`. Silent fallback to a default renderer would
+    # mask architecture-evolution bugs (a new layer type added downstream
+    # would get the wrong parameterisation without anyone noticing).
     def f(path, shape, dtype, params):
         conv_p, fc_p = params
         n = math.prod(shape)
@@ -109,8 +124,13 @@ def main() -> None:
             (conv_enc, conv_body_m) = conv_p
             encoded = jax.vmap(conv_enc)(coords_1d)
             ys = jax.vmap(conv_body_m)(encoded)
-        else:
+        elif _is_fc_path(path):
             ys = jax.vmap(fc_p)(coords_1d)
+        else:
+            raise KeyError(
+                f"no renderer for path {jax.tree_util.keystr(path)!r}; "
+                "add a branch in `f` (conv/fc are the only mapped families)"
+            )
         return ys.reshape(shape).astype(dtype)
 
     params = ((conv_encoding, conv_body), fc_body)
@@ -127,8 +147,12 @@ def main() -> None:
     for path, leaf in jax.tree_util.tree_leaves_with_path(renderable, is_leaf=eqx.is_array):
         if not eqx.is_array(leaf):
             continue
-        bucket = conv_paths if _is_conv_path(path) else fc_paths
-        bucket.append(jax.tree_util.keystr(path))
+        # Mirror the dispatch in `f`: each leaf must hit exactly one branch.
+        # If render() succeeded above, no leaf is unmapped here either.
+        if _is_conv_path(path):
+            conv_paths.append(jax.tree_util.keystr(path))
+        elif _is_fc_path(path):
+            fc_paths.append(jax.tree_util.keystr(path))
     print(f"  conv-branch leaves ({len(conv_paths)}):")
     for p in conv_paths:
         print(f"    {p}")
