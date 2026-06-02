@@ -28,20 +28,13 @@ EXPECTED = [
 ]
 
 
-def _find_example(prefix: str) -> Path | None:
-    if not EXAMPLES_DIR.is_dir():
-        return None
-    matches = sorted(EXAMPLES_DIR.glob(f"{prefix}_*.py"))
-    return matches[0] if matches else None
-
-
 @pytest.mark.integration
-@pytest.mark.parametrize(("prefix", "slug"), EXPECTED, ids=[p for p, _ in EXPECTED])
+@pytest.mark.parametrize(("prefix", "slug"), EXPECTED, ids=[f"{p}_{s}" for p, s in EXPECTED])
 def test_example_runs(prefix: str, slug: str) -> None:
     # Given: an example script for this pattern
-    script = _find_example(prefix)
-    if script is None:
-        pytest.skip(f"examples/{prefix}_*.py not present yet")
+    script = EXAMPLES_DIR / f"{prefix}_{slug}.py"
+    if not script.is_file():
+        pytest.skip(f"examples/{prefix}_{slug}.py not present yet")
 
     # When: we run it as a subprocess
     result = subprocess.run(
