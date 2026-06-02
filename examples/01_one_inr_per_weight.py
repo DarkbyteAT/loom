@@ -59,10 +59,13 @@ def main() -> None:
 
     target = TinyMLP(key=k_target)
 
-    # Filter to floating-point arrays so we only build INRs for trainable weights
-    # (the canonical pattern from PHILOSOPHY.md §"Composition recipes").
+    # Filter to floating-point arrays with at least one axis so we only build
+    # INRs for trainable, coordinate-bearing weights (the canonical pattern
+    # from PHILOSOPHY.md §"Composition recipes"). The `ndim > 0` clause
+    # skips 0-D scalars (e.g. learnable temperatures) — coordinate-based
+    # INRs need at least one axis to build a grid against.
     def is_float(x):
-        return eqx.is_array(x) and jnp.issubdtype(x.dtype, jnp.floating)
+        return eqx.is_array(x) and jnp.issubdtype(x.dtype, jnp.floating) and x.ndim > 0
 
     renderable, passthrough = eqx.partition(target, is_float)
 
@@ -106,7 +109,11 @@ def main() -> None:
         r = eqx.combine(loom.render(renderable, f, p), passthrough)
         return jnp.sum(r(x) ** 2)
 
-    grads = jax.grad(loss_of)(inrs)
+    # Use `eqx.filter_grad` rather than `jax.grad` — Equinox's filtered grad
+    # differentiates only the floating-array leaves and passes everything else
+    # through, so the call stays robust against static fields inside the
+    # `SIREN` bodies (e.g. `out_features: int | None`).
+    grads = eqx.filter_grad(loss_of)(inrs)
     for tag, g in grads.items():
         norm = jnp.linalg.norm(g.layers[0].W)
         print(f"grad norm on {tag} (first SIREN layer W): {norm:.4f}")

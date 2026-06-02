@@ -57,8 +57,10 @@ def main() -> None:
 
     target = TinyMLP(key=k_target)
 
+    # `ndim > 0` skips 0-D scalars (e.g. learnable temperatures) — coordinate-
+    # based INRs need at least one axis to build a grid against.
     def is_float(x):
-        return eqx.is_array(x) and jnp.issubdtype(x.dtype, jnp.floating)
+        return eqx.is_array(x) and jnp.issubdtype(x.dtype, jnp.floating) and x.ndim > 0
 
     renderable, _ = eqx.partition(target, is_float)
 
