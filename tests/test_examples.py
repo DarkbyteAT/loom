@@ -7,6 +7,7 @@ this suite can run before the examples-A/B PRs merge.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -36,7 +37,15 @@ def test_example_runs(prefix: str, slug: str) -> None:
     if not script.is_file():
         pytest.skip(f"examples/{prefix}_{slug}.py not present yet")
 
-    # When: we run it as a subprocess
+    # When: we run it as a subprocess. Python prepends the script's directory
+    # (examples/) to sys.path, not the repo root, so we explicitly inject the
+    # repo root via PYTHONPATH. Without this, `import loom` from the script
+    # depends on loom being installed in the active environment and could
+    # silently pick up a stale globally-installed version.
+    env = os.environ.copy()
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = f"{REPO_ROOT}{os.pathsep}{existing}" if existing else str(REPO_ROOT)
+
     result = subprocess.run(
         [sys.executable, str(script)],
         check=False,
@@ -44,6 +53,7 @@ def test_example_runs(prefix: str, slug: str) -> None:
         text=True,
         timeout=TIMEOUT_S,
         cwd=REPO_ROOT,
+        env=env,
     )
 
     # Then: it exits cleanly and prints a PASS sentinel
