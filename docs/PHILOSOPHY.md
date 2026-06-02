@@ -215,24 +215,30 @@ The principles above rule each of these out structurally. This section restates 
 
 ## Refactor-safe dispatch (recipe, not API)
 
-The native identity is `KeyPath`. Paths are fragile under field renames — rename `conv1` → `conv_a` and every dispatch dict keyed on the old path breaks. The substrate accepts this cost in exchange for Principle 3 (no wrapper types). Users who need refactor-safety own a small adapter:
+The native identity is `KeyPath`. Paths are fragile under field renames — rename `conv1` → `conv_a` and every dispatch dict keyed on the old path breaks. The substrate accepts this cost in exchange for Principle 3 (no wrapper types). Users who need refactor-safety own a small adapter, keyed on the canonical path string produced by `jax.tree_util.keystr`:
 
 ```python
-# Stable tag map lives in user code, next to the model
+import jax.tree_util as jtu
+
+# Stable tag map lives in user code, next to the model.
+# Keys are jtu.keystr(path) strings — canonical across every JAX key type
+# (GetAttrKey, DictKey, SequenceKey, FlattenedIndexKey).
 tag_of_path = {
-    ("conv1", "weight"): "conv_first",
-    ("conv2", "weight"): "conv_second",
-    ("head",  "weight"): "head",
+    ".conv1.weight": "conv_first",
+    ".conv2.weight": "conv_second",
+    ".head.weight":  "head",
 }
 
 def f(path, shape, dtype, params):
-    tag = tag_of_path[tuple(p.name for p in path if hasattr(p, 'name'))]
+    tag = tag_of_path[jtu.keystr(path)]
     return inrs[tag].materialise(shape, dtype, params[tag])
 
 rendered = loom.render(P, f, inr_params_by_tag)
 ```
 
 Rename `conv1` → `conv_a`: update one line in `tag_of_path`, everything else holds. Five-line user pattern, not a loom primitive — preserves Principle 3 and gives the escape hatch.
+
+**Why `keystr`, not `tuple(p.name for p in path)`.** JAX paths mix key types: `GetAttrKey` exposes `.name`, `DictKey` exposes `.key`, `SequenceKey` exposes `.idx`, `FlattenedIndexKey` exposes `.key`. A `hasattr(p, 'name')` filter silently drops every non-attribute key, collapsing distinct paths (e.g. `layers[0].weight` and `layers[1].weight`) to the same tuple and producing key collisions. `jtu.keystr` is JAX's canonical string form for any path — distinct paths render to distinct strings, so the dispatch map stays unambiguous regardless of how the model mixes attribute, dict, and index access.
 
 ## Test the substrate
 
