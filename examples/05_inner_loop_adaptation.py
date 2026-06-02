@@ -28,6 +28,8 @@ K is capped at 5 to keep the example fast and the trajectory plot readable.
 
 from __future__ import annotations
 
+import math
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -60,9 +62,7 @@ def main() -> None:
     def f(path, shape, dtype, params):
         # `params` here *is* the body. The whole point: gradients flow back
         # into the body's weights via standard autodiff.
-        n = 1
-        for d in shape:
-            n *= d
+        n = math.prod(shape)
         coords = jnp.linspace(-1.0, 1.0, n)[:, None]
         ys = jax.vmap(params)(coords)
         return ys.reshape(shape).astype(dtype)
@@ -76,7 +76,7 @@ def main() -> None:
 
     def task_loss(rendered_target: eqx.Module) -> jax.Array:
         full = eqx.combine(rendered_target, passthrough)
-        y_pred = jax.vmap(lambda x: full(x))(x_batch)
+        y_pred = jax.vmap(full)(x_batch)
         return jnp.mean((y_pred - y_target) ** 2)
 
     def task_loss_of(p):
@@ -87,7 +87,10 @@ def main() -> None:
     K = 5
 
     def inner_step(p, _):
-        loss, grads = jax.value_and_grad(task_loss_of)(p)
+        # `eqx.filter_value_and_grad` ignores non-array leaves (static
+        # metadata, ints, bool flags) — drop-in safer than `jax.value_and_grad`
+        # for downstream consumers whose modules carry static fields.
+        loss, grads = eqx.filter_value_and_grad(task_loss_of)(p)
         # Pytree subtraction: walk both trees, subtract leaf-wise. Equinox
         # makes this read like ordinary arithmetic on float arrays only.
         p_new = jax.tree_util.tree_map(

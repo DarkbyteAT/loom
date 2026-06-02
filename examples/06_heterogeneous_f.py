@@ -31,12 +31,24 @@ will need.
 
 from __future__ import annotations
 
+import math
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import ondes
 
 import loom
+
+
+def _is_conv_path(path: tuple) -> bool:
+    """True if any KeyPath part is a `GetAttrKey` whose name starts with 'conv'.
+
+    Pattern-matching on `GetAttrKey.name` is more robust than substring-checking
+    the rendered key-string — it can't false-positive on a dict key or sequence
+    index that happens to contain "conv".
+    """
+    return any(isinstance(k, jax.tree_util.GetAttrKey) and k.name.startswith("conv") for k in path)
 
 
 class TinyConvNet(eqx.Module):
@@ -83,24 +95,17 @@ def main() -> None:
     conv_body = ondes.SIREN(in_dim=16, hidden_dim=16, num_hidden_layers=2, key=k_conv_body)
     fc_body = ondes.SIREN(in_dim=1, hidden_dim=16, num_hidden_layers=2, key=k_fc_body)
 
-    # Track which branch fires per path — for printing only.
-    branch_log: dict[str, str] = {}
-
+    # The renderer is *pure*: branch dispatch reads only `path` and `params`,
+    # writes nothing to enclosing scope. loom's Guarantee 7 says iteration
+    # order is unspecified and `f` may be traced/transformed, so any side
+    # effect inside `f` is undefined behaviour. Branch tracking for the
+    # report is recovered separately from `renderable`'s paths below.
     def f(path, shape, dtype, params):
         conv_p, fc_p = params
-        # Path is a tuple of jax KeyPath key-parts. eqx.Module attribute
-        # access shows up as GetAttrKey(name='conv1'); we identify conv vs
-        # fc by checking whether any attribute key starts with "conv".
-        path_str = jax.tree_util.keystr(path)
-        is_conv = "conv" in path_str
-        branch_log[path_str] = "conv" if is_conv else "fc"
-
-        n = 1
-        for d in shape:
-            n *= d
+        n = math.prod(shape)
         coords_1d = jnp.linspace(-1.0, 1.0, n)[:, None]
 
-        if is_conv:
+        if _is_conv_path(path):
             (conv_enc, conv_body_m) = conv_p
             encoded = jax.vmap(conv_enc)(coords_1d)
             ys = jax.vmap(conv_body_m)(encoded)
@@ -114,10 +119,16 @@ def main() -> None:
     # Recombine with non-float passthrough leaves so we get a full module.
     final = eqx.combine(rendered, passthrough)
 
-    # Report
+    # Report — recover the per-branch partition from `renderable`'s paths.
+    # No side effects from `f` needed.
     print("Heterogeneous `f` rendered a CNN target with two parameterisations:")
-    conv_paths = [p for p, b in branch_log.items() if b == "conv"]
-    fc_paths = [p for p, b in branch_log.items() if b == "fc"]
+    conv_paths: list[str] = []
+    fc_paths: list[str] = []
+    for path, leaf in jax.tree_util.tree_leaves_with_path(renderable, is_leaf=eqx.is_array):
+        if not eqx.is_array(leaf):
+            continue
+        bucket = conv_paths if _is_conv_path(path) else fc_paths
+        bucket.append(jax.tree_util.keystr(path))
     print(f"  conv-branch leaves ({len(conv_paths)}):")
     for p in conv_paths:
         print(f"    {p}")

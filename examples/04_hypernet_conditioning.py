@@ -27,6 +27,8 @@ or a samgria-style "task-conditioned inner loop init" needs.
 
 from __future__ import annotations
 
+import math
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -67,8 +69,8 @@ def main() -> None:
     renderable, passthrough = eqx.partition(target, is_float)
 
     # Shared INR body. One body, all leaves; specialisation comes via FiLM +
-    # the conditioning context. Output dim must cover any (flattened) leaf,
-    # so we pick the largest leaf size.
+    # the conditioning context. The body outputs a scalar per call and we
+    # query it once per output element (n = prod(shape)) inside `f`.
     leaf_paths_shapes = [
         (path, leaf.shape)
         for path, leaf in jax.tree_util.tree_leaves_with_path(renderable, is_leaf=eqx.is_array)
@@ -99,9 +101,7 @@ def main() -> None:
     # The renderer. Same shape as PHILOSOPHY §"Test the substrate" case 4.
     def f(path, shape, dtype, params):
         body_p, films_p, ctx = params
-        n = 1
-        for d in shape:
-            n *= d
+        n = math.prod(shape)
         # 1-D coord per output element, concatenated with the (broadcast) ctx.
         coords_1d = jnp.linspace(-1.0, 1.0, n)[:, None]  # (n, 1)
         ctx_broad = jnp.broadcast_to(ctx, (n, ctx_dim))  # (n, ctx_dim)
