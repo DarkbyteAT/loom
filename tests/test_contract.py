@@ -7,6 +7,8 @@ shapes and one static string field that should pass through.
 
 from __future__ import annotations
 
+from typing import Any
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -242,3 +244,72 @@ def test_render_error_wraps_arbitrary_exceptions():
     # And the subclass guarantees are not falsely triggered
     assert not isinstance(exc_info.value, ShapeMismatch)
     assert not isinstance(exc_info.value, DTypeMismatch)
+
+
+# --- Defensive: non-array returns from `f` are wrapped, not raised raw -----
+
+
+@pytest.mark.parametrize(
+    ("value", "type_name"),
+    [
+        (None, "NoneType"),
+        (42, "int"),
+        ([1.0, 2.0, 3.0], "list"),
+    ],
+)
+def test_non_array_return_raises_render_error(value: Any, type_name: str):
+    # Given: a renderer that returns a non-array Python value
+    target = make_target()
+
+    def bad(path, shape, dtype, params):
+        return value
+
+    # When/Then: the bad return is wrapped in RenderError with path + type context
+    with pytest.raises(RenderError) as exc_info:
+        loom.render(target, bad, None)
+
+    msg = str(exc_info.value)
+    assert (".w" in msg) or (".b" in msg)  # path-pointing
+    # Subclass guarantees are not falsely triggered — this is the base class
+    assert not isinstance(exc_info.value, ShapeMismatch)
+    assert not isinstance(exc_info.value, DTypeMismatch)
+    # The underlying TypeError carries the offending type name for the user
+    cause = exc_info.value.__cause__
+    assert isinstance(cause, TypeError)
+    assert type_name in str(cause)
+
+
+# --- Serialisation: error hierarchy survives cross-process round-trip -----
+
+
+def test_render_errors_survive_cross_process_serialisation():
+    """Exceptions must round-trip via the standard reconstruction protocol so
+    JAX worker -> driver re-raise (multi-host / multiprocessing) works.
+    """
+    import pickle  # noqa: S403 -- exception reconstruction, not data deserialisation
+
+    # Given: one instance of each error type with realistic context
+    path = (jax.tree_util.GetAttrKey("w"),)
+    base = RenderError(path, (3, 4), jnp.float32)
+    shape_err = ShapeMismatch(path, (3, 4), (7,), jnp.float32)
+    dtype_err = DTypeMismatch(path, (3, 4), jnp.float32, jnp.float64)
+
+    # When: each is round-tripped through the serialisation protocol
+    for original in (base, shape_err, dtype_err):
+        revived = pickle.loads(pickle.dumps(original))  # noqa: S301 -- round-trip of our own class
+
+        # Then: type, attributes, and rendered message all survive
+        assert type(revived) is type(original)
+        assert revived.path == original.path
+        assert revived.shape == original.shape
+        assert revived.dtype == original.dtype
+        assert str(revived) == str(original)
+
+    # And: subclass-specific attributes survive too
+    revived_shape = pickle.loads(pickle.dumps(shape_err))  # noqa: S301
+    assert isinstance(revived_shape, ShapeMismatch)
+    assert revived_shape.actual_shape == (7,)
+
+    revived_dtype = pickle.loads(pickle.dumps(dtype_err))  # noqa: S301
+    assert isinstance(revived_dtype, DTypeMismatch)
+    assert revived_dtype.actual_dtype == jnp.float64
