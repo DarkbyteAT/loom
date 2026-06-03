@@ -153,12 +153,23 @@ def main() -> None:
         "and produced finite losses. Whether through-render is competitive with "
         "direct as a parameterisation belongs to downstream evidence (fws), not here."
     )
-    # Structural invariants only — no magnitude thresholds. JAX scan-shape
-    # contract is the load-bearing claim: K=5 returns K finite values.
+    # Asserts are structural + directional only — no magnitudes. JAX scan-
+    # shape contract: K=5 returns K finite values. Directional gradient-flow
+    # check: final < initial (loss went DOWN over the trajectory), not "by
+    # at least X". A reversal would mean gradient direction is broken — that
+    # IS a substrate-level claim, not a learned-system magnitude.
     assert loss_trace.shape == (K,), f"through-render trajectory was wrong length: {loss_trace.shape}"
     assert loss_trace_direct.shape == (K,), f"direct trajectory was wrong length: {loss_trace_direct.shape}"
     assert bool(jnp.all(jnp.isfinite(loss_trace))), "through-render produced non-finite loss"
     assert bool(jnp.all(jnp.isfinite(loss_trace_direct))), "direct produced non-finite loss"
+    assert float(loss_trace[-1]) < float(loss_trace[0]), (
+        "through-render trajectory did not decrease — gradient flow through "
+        "`loom.render` is broken (Guarantee 5 violation)."
+    )
+    assert float(loss_trace_direct[-1]) < float(loss_trace_direct[0]), (
+        "direct trajectory did not decrease — autodiff on the rendered Linear "
+        "weights doesn't work, which means the rendered tree isn't differentiable."
+    )
 
 
 if __name__ == "__main__":

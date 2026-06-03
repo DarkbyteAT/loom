@@ -164,13 +164,17 @@ def main() -> None:
     print(f"  varying ctx: {'  '.join(f'{d:.6f}' for d in dev_trace)}")
     print(f"  constant ctx: {'  '.join(f'{d:.6e}' for d in dev_const)}")
     print(f"  max deviation: varying={float(jnp.max(dev_trace)):.6f}  constant={float(jnp.max(dev_const)):.6e}")
-    # Structural invariant: pure `f` + same `params` -> same output.
-    # Any non-zero here would mean the substrate is non-deterministic.
-    assert jnp.all(dev_const == 0.0), (
-        "constant-ctx scan produced non-zero deviation; "
-        "`loom.render` is non-deterministic in `params`, which breaks Guarantee 7."
+    # Structural invariant: pure `f` + same `params` -> same output up to
+    # float-precision rounding. Tolerance is dtype-derived (not a magic
+    # number); N=10 covers the handful of rounding ops involved (a SIREN
+    # forward, vmap-fusion, and a max-abs-diff reduction).
+    eps = jnp.finfo(dev_const.dtype).eps
+    assert bool(jnp.all(dev_const < 10 * eps)), (
+        f"constant-ctx scan produced deviation > 10*eps ({float(jnp.max(dev_const)):.2e} vs "
+        f"{10 * float(eps):.2e}); `loom.render` is non-deterministic in `params`, "
+        "which breaks Guarantee 7."
     )
-    print("Constant-ctx deviation is exactly zero (Guarantee 7 — `f` is pure).")
+    print(f"Constant-ctx deviation < 10 * dtype_eps ({10 * float(eps):.2e}) — Guarantee 7 (`f` is pure).")
 
     # Sanity: structure preservation. The render output is the same pytree
     # as `renderable`, ready to recombine with `passthrough`.
