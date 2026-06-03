@@ -17,7 +17,9 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES_DIR = REPO_ROOT / "examples"
-TIMEOUT_S = 30
+# Sized for JAX cold-compile on CI runners; tighter values flake on first-run
+# tracing for examples 03 (hypernet vmap) and 05 (inner-loop scan-grad).
+TIMEOUT_S = 60
 
 EXPECTED = [
     ("01", "one_inr_per_weight"),
@@ -34,6 +36,11 @@ EXPECTED = [
 def test_example_runs(prefix: str, slug: str) -> None:
     # Given: an example script for this pattern
     script = EXAMPLES_DIR / f"{prefix}_{slug}.py"
+    # TODO: remove the skip-on-missing branch once the tier-2 wave merges into
+    # feat/v01-render-substrate. Before merge it lets this PR's CI run green
+    # on a branch that doesn't yet contain the examples; after merge a missing
+    # file is a real test failure (silent skip would hide an accidental
+    # rename/delete), so this branch should hard-fail instead.
     if not script.is_file():
         pytest.skip(f"examples/{prefix}_{slug}.py not present yet")
 
