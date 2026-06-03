@@ -65,11 +65,10 @@ def test_example_runs(prefix: str, slug: str) -> None:
         )
     except subprocess.TimeoutExpired as exc:
         # capture_output=True swallows the partial stdout/stderr into the
-        # exception; surface them so CI failures are debuggable. Use
-        # exc.output rather than exc.stdout — both work (.stdout is a property
-        # aliasing .output on TimeoutExpired), but .output is the documented
-        # attribute and avoids triggering false-positive linter warnings.
-        pytest.fail(f"{script.name} timed out after {TIMEOUT_S}s\nstdout:\n{exc.output!r}\nstderr:\n{exc.stderr!r}")
+        # exception; surface them so CI failures are debuggable. Use bare
+        # interpolation (no !r) so JAX tracebacks stay multi-line and readable
+        # — same formatting as the assert-failure path below.
+        pytest.fail(f"{script.name} timed out after {TIMEOUT_S}s\nstdout:\n{exc.output}\nstderr:\n{exc.stderr}")
 
     # Then: it exits cleanly and prints a PASS sentinel
     assert result.returncode == 0, (
