@@ -118,6 +118,57 @@ def main() -> None:
         norm = jnp.linalg.norm(g.layers[0].W)
         print(f"grad norm on {tag} (first SIREN layer W): {norm:.4f}")
 
+    # Contrast smoke test — does path dispatch actually distinguish leaves?
+    #
+    # Build a second `inrs_replicated` dict where every same-rank tag maps to
+    # the SAME `SIREN` instance (rather than its own independent network). If
+    # path dispatch is doing the work the pattern claims, the distinct-INR
+    # configuration should produce same-rank leaves that look *less* similar
+    # to each other than the replicated-INR configuration does — under
+    # replication the only thing distinguishing two same-rank leaves is their
+    # coord grid (shape), so their renderings should be substantially more
+    # correlated than under independent INRs.
+    #
+    # We compare the two `weight` leaves (both rank-2) via cosine similarity
+    # on the shared prefix of their flat representations — shape-agnostic
+    # and bounded in [-1, 1], so the contrast is interpretable.
+    print("\n--- contrast smoke test: path dispatch vs replicated INR ---")
+
+    rank2_tags = sorted(t for t, leaf in inrs.items() if leaf.layers[0].W.shape[1] == 2)
+    assert rank2_tags == ["fc1/weight", "fc2/weight"], rank2_tags
+
+    shared_inr = inrs[rank2_tags[0]]
+    inrs_replicated = {**inrs, rank2_tags[1]: shared_inr}
+
+    rendered_distinct = loom.render(renderable, f, inrs)
+    rendered_replicated = loom.render(renderable, f, inrs_replicated)
+
+    def flat(leaf_pytree, tag: str):
+        attr1, attr2 = tag.split("/")
+        return getattr(getattr(leaf_pytree, attr1), attr2).ravel()
+
+    def cos_sim(a: jax.Array, b: jax.Array) -> float:
+        n = min(a.size, b.size)
+        a, b = a[:n], b[:n]
+        return float(jnp.dot(a, b) / (jnp.linalg.norm(a) * jnp.linalg.norm(b) + 1e-12))
+
+    a_d = flat(rendered_distinct, rank2_tags[0])
+    b_d = flat(rendered_distinct, rank2_tags[1])
+    a_r = flat(rendered_replicated, rank2_tags[0])
+    b_r = flat(rendered_replicated, rank2_tags[1])
+
+    cos_d = cos_sim(a_d, b_d)
+    cos_r = cos_sim(a_r, b_r)
+    print(f"with path dispatch:    cos(fc1.weight, fc2.weight) = {cos_d:+.4f}")
+    print(f"with replicated INR:   cos(fc1.weight, fc2.weight) = {cos_r:+.4f}")
+    print(f"absolute contrast:     |Δcos| = {abs(cos_d - cos_r):.4f}")
+    print(
+        "→ a non-trivial |Δcos| confirms path dispatch produces a different\n"
+        "  rendering than replication: swapping the params dict changes the\n"
+        "  rendered tree (rather than every leaf collapsing to the same value)."
+    )
+    assert abs(cos_d - cos_r) > 0.01, "path dispatch appears decorative — distinct vs replicated barely differ"
+
 
 if __name__ == "__main__":
     main()

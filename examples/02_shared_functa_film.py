@@ -52,7 +52,7 @@ def make_coord_grid(shape: tuple[int, ...]) -> jax.Array:
 
 def main() -> None:
     key = jax.random.key(0)
-    k_target, k_body = jax.random.split(key)
+    k_target, k_body, k_films = jax.random.split(key, 3)
 
     target = TinyMLP(key=k_target)
 
@@ -77,7 +77,16 @@ def main() -> None:
     def tag_of(path):
         return "/".join(getattr(p, "name", str(p)) for p in path)
 
-    films = {tag_of(p): jnp.zeros((NUM_HIDDEN_LAYERS, 2 * HIDDEN_DIM)) for p, _ in leaves_with_paths}
+    # Two FiLM configurations, used together by the contrast smoke test below.
+    # `films_distinct` carries random per-leaf modulation; `films_zero` forces
+    # every leaf through the body with no modulation. The "main" rendering
+    # uses the distinct FiLMs (the canonical Functa pattern).
+    film_keys = jax.random.split(k_films, len(leaves_with_paths))
+    films = {
+        tag_of(p): 0.5 * jax.random.normal(k, (NUM_HIDDEN_LAYERS, 2 * HIDDEN_DIM))
+        for (p, _), k in zip(leaves_with_paths, film_keys, strict=True)
+    }
+    films_zero = {tag: jnp.zeros_like(film) for tag, film in films.items()}
 
     def pad_coords(coords: jax.Array, target_in_dim: int) -> jax.Array:
         if coords.shape[-1] == target_in_dim:
@@ -106,6 +115,50 @@ def main() -> None:
     print(f"total per-leaf FiLM param count ({len(films)} leaves): {film_param_count}")
     print(f"per-leaf FiLM param count (mean): {film_param_count // len(films)}")
     print("→ adding a new renderable leaf grows params by the FiLM size only, not by a fresh body.")
+
+    # Contrast smoke test — does FiLM actually modulate the shared body?
+    #
+    # Render the same target twice: once with the distinct per-leaf FiLMs
+    # built above, once with every FiLM forced to zero. With FiLM=0 each
+    # leaf still differs (its coord grid still differs by shape), but the
+    # body sees no per-leaf signal — so the cross-leaf spread in summary
+    # statistics is bounded by what coord-grid topology alone can produce.
+    # With distinct FiLMs that spread should be visibly larger; if it isn't,
+    # FiLM is decorative and the body is ignoring its `film` kwarg.
+    #
+    # Metric: max pairwise distance between per-leaf means. Per-leaf mean
+    # is the cheapest shape-agnostic summary (one scalar per leaf), so
+    # leaves of different shapes can be compared on the same footing.
+    print("\n--- contrast smoke test: distinct FiLM vs zero FiLM ---")
+
+    rendered_zero_renderable = loom.render(renderable, f, (body, films_zero))
+    rendered_zero = eqx.combine(rendered_zero_renderable, passthrough)
+
+    def per_leaf_means(rendered_tree, tags: list[str]) -> jax.Array:
+        leaves = []
+        for tag in tags:
+            attr1, attr2 = tag.split("/")
+            leaves.append(jnp.mean(getattr(getattr(rendered_tree, attr1), attr2)))
+        return jnp.stack(leaves)
+
+    tags = sorted(films.keys())
+    means_distinct = per_leaf_means(rendered, tags)
+    means_zero = per_leaf_means(rendered_zero, tags)
+    spread_distinct = float(jnp.max(means_distinct) - jnp.min(means_distinct))
+    spread_zero = float(jnp.max(means_zero) - jnp.min(means_zero))
+
+    for tag, md, mz in zip(tags, means_distinct, means_zero, strict=True):
+        print(f"  {tag:14s}  mean(distinct)={float(md):+.4f}  mean(zero)={float(mz):+.4f}")
+    print(f"cross-leaf mean-spread (distinct FiLM): {spread_distinct:.4f}")
+    print(f"cross-leaf mean-spread (zero    FiLM): {spread_zero:.4f}")
+    print(
+        "→ distinct > zero confirms FiLM is modulating the shared body — the\n"
+        "  per-leaf signal is reaching the activations rather than being\n"
+        "  dropped on the floor."
+    )
+    assert spread_distinct > spread_zero, (
+        "FiLM modulation appears decorative — distinct spread does not exceed zero spread"
+    )
 
 
 if __name__ == "__main__":
