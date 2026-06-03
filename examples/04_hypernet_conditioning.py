@@ -117,11 +117,13 @@ def main() -> None:
         params_t = (body, films, ctx_t)
         rendered_t = loom.render(renderable, f, params_t)
         # Per-leaf magnitude — proves the context actually modulates output.
-        mags = jax.tree_util.tree_map(
-            lambda leaf: jnp.sqrt(jnp.mean(leaf**2)),
-            eqx.filter(rendered_t, eqx.is_array),
-        )
-        flat_mags = jnp.stack(jax.tree_util.tree_leaves(mags))
+        # Comprehend over `tree_leaves` directly and filter; using
+        # `eqx.filter(..., is_array)` + `tree_map` is fragile because
+        # `filter` replaces non-array leaves with `None`, and `None` is
+        # itself a leaf under `tree_map` — the mapper would crash on it
+        # the moment the target architecture grows a non-array leaf.
+        mags = [jnp.sqrt(jnp.mean(leaf**2)) for leaf in jax.tree_util.tree_leaves(rendered_t) if eqx.is_array(leaf)]
+        flat_mags = jnp.stack(mags)
         return carry, flat_mags
 
     _, mag_trace = jax.lax.scan(step, None, contexts)
