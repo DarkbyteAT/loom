@@ -346,41 +346,8 @@ def test_dtype_mismatch_with_x64_disabled():
     assert isinstance(exc_info.value, RenderError)
 
 
-@pytest.mark.parametrize(
-    ("value", "type_name"),
-    [
-        ({"out": 1.0}, "dict"),
-        ((1.0, 2.0), "tuple"),
-    ],
-)
-def test_f_returning_pytree_raises_render_error(value: Any, type_name: str):
-    """`f` returning a pytree (dict/tuple) instead of an array must raise.
-
-    Guarantee 1 says every renderable leaf is replaced by `f`'s output, with
-    `(.shape, .dtype)` matching the leaf. A pytree return would break the
-    structure invariant. The substrate must surface this with a
-    `RenderError`-subclass whose chained cause names the returned type.
-    """
-    # Given: a renderer returning a pytree value
-    target = make_target()
-
-    def bad(path, shape, dtype, params):
-        return value
-
-    # When/Then: rendering raises RenderError with type-named cause
-    with pytest.raises(RenderError) as exc_info:
-        loom.render(target, bad, None)
-
-    # Path-pointing message
-    msg = str(exc_info.value)
-    assert (".w" in msg) or (".b" in msg)
-    # Not falsely a shape/dtype subclass
-    assert not isinstance(exc_info.value, ShapeMismatch)
-    assert not isinstance(exc_info.value, DTypeMismatch)
-    # Cause names the offending type so users can debug
-    cause = exc_info.value.__cause__
-    assert isinstance(cause, TypeError)
-    assert type_name in str(cause)
+# Note: pytree return cases (dict, tuple) are covered by
+# `test_non_array_return_raises_render_error` above (parametrized).
 
 
 def test_jit_without_static_argnums_documents_behaviour():
@@ -461,10 +428,8 @@ def test_eqx_partition_selective_rendering_recipe():
     Verifies `eqx.partition(target, is_float_array) → render → eqx.combine`
     works end-to-end: non-array leaves pass through, array leaves render.
     """
-    import jax.numpy as _jnp
-
     def is_float_array(x: Any) -> bool:
-        return eqx.is_array(x) and bool(_jnp.issubdtype(x.dtype, _jnp.floating))
+        return bool(eqx.is_array(x) and jnp.issubdtype(x.dtype, jnp.floating))
 
     target = make_target()
     renderable, passthrough = eqx.partition(target, is_float_array)
