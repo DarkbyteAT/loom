@@ -20,6 +20,12 @@ direct training of the target network. That claim requires K-seed training on
 real tasks with paired statistical analysis, and lives in the fws repo once
 that programme runs — not here.
 
+The examples print contrasted numerical outputs (config A versus config B)
+for the reader to observe. They do **not** assert against specific magnitudes
+— initial conditions and hyperparameters dominate single-shot numbers. Only
+structural invariants are asserted (e.g. shape correctness, pure-`f`
+determinism producing identically-zero deviation under replicated inputs).
+
 For the formal substrate guarantees (the seven contract invariants), see
 [`tests/test_contract.py`](../tests/test_contract.py).
 
