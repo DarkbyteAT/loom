@@ -35,12 +35,6 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
-    # TODO: drop this env block once the tier-2 examples wave merges into
-    # feat/v01-render-substrate. The integration suite in
-    # tests/test_examples.py hard-fails on missing example files; this env var
-    # opts into skip-on-missing while the example PRs live on sibling branches.
-    env:
-      LOOM_ALLOW_MISSING_EXAMPLES: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -48,4 +42,4 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --group dev
-      - run: uv run pytest tests/ -v || [ $? -eq 5 ]
+      - run: uv run pytest tests/ -v

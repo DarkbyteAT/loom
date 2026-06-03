@@ -8,7 +8,7 @@ What is loom for?
 
 > **loom is a substrate for re-parameterising JAX pytrees by the output of arbitrary functions, in a way that is scannable and optimisable.**
 
-That's it. Not a renderer for neural-network weights. Not a hypernet framework. Not a training studio. A *substrate*. The substrate is function-agnostic — INRs from `ondes` are the canonical instantiation, but loom does not bake them in. Anything that maps `(path, shape, dtype, params) → array-of-leaf-shape` is a valid renderer.
+That's it. Not a renderer for neural-network weights. Not a hypernet framework. Not a training studio. A *substrate*. The substrate is function-agnostic — INRs from [`ondes`](https://github.com/DarkbyteAT/ondes) are the canonical instantiation, but loom does not bake them in. Anything that maps `(path, shape, dtype, params) → array-of-leaf-shape` is a valid renderer.
 
 Everything else — target architectures, task configs, training loops, diagnostics, plotting, sweep registries, coord-grid conventions, distribution heads — lives downstream. loom owns the mechanism, not any specific instantiation of it.
 
@@ -24,6 +24,8 @@ Throughout this document, `path` refers to a `jax.tree_util.KeyPath` — JAX's c
 - `FlattenedIndexKey(i)` for the flattened fallback
 
 You get one path per leaf when you call `jax.tree_util.tree_flatten_with_path(P)` or `tree_leaves_with_path(P)`. loom uses paths as the substrate's identity convention because they are the only leaf-identity primitive JAX itself ships — using anything else would force a parallel structure and violate Principle 3.
+
+The canonical INR consumers of loom — [`ondes`](https://github.com/DarkbyteAT/ondes) for SIREN/HSIREN/WIRE bases and Fourier encodings — accept `path`-keyed dispatch directly and provide the coord-grid construction loom deliberately does not own. Anywhere this document says "the user's `f`", the canonical realisation is an `ondes` body composed with a per-leaf modulation or context.
 
 ## Six principles
 
@@ -157,7 +159,7 @@ If a recipe takes more than five lines to express, *that's* the gap to consider 
 
 ## Contract guarantees
 
-The product loom sells is not the implementation — it's these guarantees:
+The product loom sells is not the implementation — it's these guarantees. The substrate duck-types on `(.shape, .dtype)` — any leaf exposing both attributes counts as renderable, so `jax.Array`, `numpy.ndarray`, `jax.ShapeDtypeStruct`, and equivalent shape-and-dtype-bearing values all satisfy the contract.
 
 1. **Structure preservation.** `tree_structure(render(P, f, params))` equals `tree_structure(P)`. Renderable leaves are replaced; non-shape-bearing leaves pass through unchanged.
 2. **Shape correctness.** For every renderable leaf, the rendered output has `.shape == leaf.shape`. Loom raises `loom.ShapeMismatch` (a `loom.RenderError` subclass) with a path-pointing error message when `f` violates this.
@@ -240,6 +242,8 @@ rendered = loom.render(P, f, inr_params_by_tag)
 ```
 
 Rename `conv1` → `conv_a`: update one line in `tag_of_path`, everything else holds. Five-line user pattern, not a loom primitive — preserves Principle 3 and gives the escape hatch.
+
+If you reach for a `hasattr(p, 'name')` filter or `isinstance(p, GetAttrKey)` check instead of `keystr`, you'll silently collapse `SequenceKey` / `FlattenedIndexKey` entries — paths like `layers[0].weight` and `layers[1].weight` both become `("weight",)` and collide. Stick to `jtu.keystr(path)` for models containing `Sequential` / lists / dicts.
 
 **Whole-pytree vs selective tagging.** The recipe above assumes *whole-pytree tagging*: every leaf reaching `f` is renderable and must have a tag — a missing key is a user error and should fail loudly with the path attached. If you instead want *selective tagging* (some leaves rendered by INRs, others passed through unchanged), do not branch inside `f` on a missing tag — that mixes substrate concerns with model concerns. Use `eqx.partition` upstream to split the model into the renderable subtree (handed to `loom.render`) and the pass-through subtree (left alone), then `eqx.combine` the results. The substrate sees one homogeneous tree; `f` stays a total function over the leaves it receives.
 

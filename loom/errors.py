@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from jax.tree_util import keystr  # pyright: ignore[reportUnknownVariableType]
+
 
 KeyPath = tuple[Any, ...]
 
@@ -32,8 +34,6 @@ def _format_path(path: KeyPath) -> str:
     """
     if not path:
         return "<root>"
-    from jax.tree_util import keystr  # pyright: ignore[reportUnknownVariableType]
-
     return str(keystr(path))
 
 
