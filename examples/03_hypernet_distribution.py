@@ -1,10 +1,11 @@
 """Substrate pattern 3 — one render call, B distinct param sets, via vmap.
 
-``jax.vmap(loom.render, in_axes=(None, None, 0))`` over a leading batch axis
-of ``params``. The target pytree ``P`` and the renderer function ``f`` are
-broadcast (``None``); ``params`` is mapped (``0``). One call yields B
-independent materialisations of the same target shape — each with its own
-INR parameters.
+``eqx.filter_vmap(loom.render, in_axes=(None, None, eqx.if_array(0)))`` over
+a leading batch axis of ``params``. The target pytree ``P`` and the
+renderer function ``f`` are broadcast (``None``); array leaves of ``params``
+are mapped on axis 0 and any non-array leaves broadcast (``eqx.if_array(0)``).
+One call yields B independent materialisations of the same target shape —
+each with its own INR parameters.
 
 FWS-side relevance: this is the **amortised hypernet pattern**. Instead of
 training one INR per target (pattern 1) or one shared body across leaves of
@@ -93,9 +94,15 @@ def main() -> None:
         flat = jax.vmap(params)(coords).astype(dtype)
         return flat.reshape(shape)
 
-    # The canonical batched-render call from PHILOSOPHY Guarantee 4:
-    # P and f are broadcast (None); params is mapped (0).
-    rendered_batch = jax.vmap(loom.render, in_axes=(None, None, 0))(renderable, f, bodies_batch)
+    # The canonical batched-render call from PHILOSOPHY Guarantee 4: P and f
+    # broadcast (None); params is mapped (0). We use `eqx.filter_vmap` rather
+    # than `jax.vmap` so the call stays correct on a pytree of `ondes.SIREN`s
+    # that mixes array and non-array leaves: `eqx.if_array(0)` maps array
+    # leaves on axis 0 and broadcasts everything else. Works today with
+    # plain `jax.vmap` because Equinox marks SIREN's metadata fields static
+    # (already filtered before vmap sees them), but the filter form stays
+    # robust under future ondes changes.
+    rendered_batch = eqx.filter_vmap(loom.render, in_axes=(None, None, eqx.if_array(0)))(renderable, f, bodies_batch)
 
     # One render call → B distinct CNN-shape parameter sets stacked on axis 0.
     print(f"fc1.weight stacked shape: {rendered_batch.fc1.weight.shape}")  # (BATCH, 6, 4)
@@ -117,7 +124,7 @@ def main() -> None:
     # first one replicated B times) and render through the same vmap call.
     # Under correct vmap semantics the per-batch pair-diffs must collapse to
     # zero up to floating-point rounding — this is a structural invariant of
-    # `jax.vmap`, not a property of initial conditions, so we assert it
+    # `vmap`, not a property of initial conditions, so we assert it
     # (with a dtype-derived tolerance — see the assert site below). The
     # distinct-params line alongside is reported for the reader to observe;
     # we make no claim about its magnitude.
@@ -135,7 +142,9 @@ def main() -> None:
     )
     bodies_replicated = eqx.combine(arrays_replicated, static)
 
-    rendered_batch_replicated = jax.vmap(loom.render, in_axes=(None, None, 0))(renderable, f, bodies_replicated)
+    rendered_batch_replicated = eqx.filter_vmap(loom.render, in_axes=(None, None, eqx.if_array(0)))(
+        renderable, f, bodies_replicated
+    )
     w_r = rendered_batch_replicated.fc1.weight
     pair_diffs_replicated = jnp.linalg.norm(w_r[0] - w_r[1:], axis=(-2, -1))
 
