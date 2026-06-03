@@ -428,6 +428,7 @@ def test_eqx_partition_selective_rendering_recipe():
     Verifies `eqx.partition(target, is_float_array) → render → eqx.combine`
     works end-to-end: non-array leaves pass through, array leaves render.
     """
+
     def is_float_array(x: Any) -> bool:
         return bool(eqx.is_array(x) and jnp.issubdtype(x.dtype, jnp.floating))
 
