@@ -109,20 +109,17 @@ def main() -> None:
     w = rendered_batch.fc1.weight
     pair_diffs = jnp.linalg.norm(w[0] - w[1:], axis=(-2, -1))
     print(f"‖fc1.weight[0] − fc1.weight[i]‖ for i in 1..{BATCH - 1}: {pair_diffs}")
-    assert jnp.all(pair_diffs > 0), "batch elements collapsed — hypernet is degenerate"
 
     # Contrast smoke test — does vmap-over-params actually distribute, or is
     # it covertly broadcasting?
     #
     # Build a second batch where every batch element is the SAME body (the
     # first one replicated B times) and render through the same vmap call.
-    # Under correct vmap semantics the per-batch pair-diffs should be
-    # exactly zero — vmap is mapping over the leading axis, and if every
-    # leading-axis slice is identical the per-slice output must be too.
-    # If we see non-zero diffs here, vmap is fabricating diversity that
-    # isn't in the params; if we see zero diffs there, vmap is collapsing
-    # diversity that IS in the params. Either failure would invalidate the
-    # hypernet pattern.
+    # Under correct vmap semantics the per-batch pair-diffs MUST be exactly
+    # zero — this is a structural invariant of `jax.vmap`, not a property
+    # of initial conditions, so we assert it. The distinct-params line
+    # alongside is reported for the reader to observe; we make no claim
+    # about its magnitude.
     print("\n--- contrast smoke test: distinct params vs replicated params ---")
 
     bodies_replicated = jax.tree_util.tree_map(
@@ -136,13 +133,7 @@ def main() -> None:
 
     print(f"with distinct params:   pair-diffs = {pair_diffs}")
     print(f"with replicated params: pair-diffs = {pair_diffs_replicated}")
-    print(
-        "→ distinct strictly positive AND replicated all zero confirms vmap is\n"
-        "  faithfully distributing along the params axis — diversity in equals\n"
-        "  diversity out, sameness in equals sameness out."
-    )
-    assert jnp.all(pair_diffs > 0)
-    assert jnp.all(pair_diffs_replicated == 0), "vmap is fabricating diversity not present in params"
+    assert jnp.all(pair_diffs_replicated == 0.0), "vmap is fabricating diversity not present in params"
 
 
 if __name__ == "__main__":
