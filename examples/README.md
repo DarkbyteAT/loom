@@ -5,6 +5,26 @@ example is a self-contained script that exercises one row of
 [§"Test the substrate"](../docs/PHILOSOPHY.md#test-the-substrate) in the
 philosophy doc, and prints `PASS` on success.
 
+## What these are (and what they are not)
+
+These examples are **API-composition demonstrations and smoke tests**, not
+baseline-comparison experiments. They show that `loom.render(P, f, params)`
+composes cleanly with the relevant JAX primitives (`jax.vmap`, `jax.lax.scan`,
+`jax.grad`, `eqx.partition`) without the substrate needing to fork for any of
+the six patterns. Each script also includes a *within-loom* contrast smoke
+test (e.g. distinct-vs-replicated INRs) confirming the pattern produces
+differentiated output where it claims to.
+
+They are **not** evidence that loom-rendered training is competitive with
+direct training of the target network. That claim requires K-seed training on
+real tasks with paired statistical analysis, and lives in the fws repo once
+that programme runs — not here.
+
+For the formal substrate guarantees (the seven contract invariants), see
+[`tests/test_contract.py`](../tests/test_contract.py).
+
+## Index
+
 | # | Pattern | Script | Philosophy case |
 |---|---|---|---|
 | 1 | One INR per weight | [`01_one_inr_per_weight.py`](01_one_inr_per_weight.py) | [case 1](../docs/PHILOSOPHY.md#test-the-substrate) |

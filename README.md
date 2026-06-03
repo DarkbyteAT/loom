@@ -19,8 +19,11 @@ on success.
 uv run python examples/01_one_inr_per_weight.py
 ```
 
-See [`examples/README.md`](examples/README.md) for the full index, and
-[`docs/PHILOSOPHY.md`](docs/PHILOSOPHY.md) for the design rationale.
+These are API-composition demonstrations and smoke tests, not benchmarks —
+they show that the substrate composes with JAX primitives, not that
+loom-rendered training is competitive with direct training. See
+[`examples/README.md`](examples/README.md) for the scope statement and full
+index, and [`docs/PHILOSOPHY.md`](docs/PHILOSOPHY.md) for the design rationale.
 
 ## License
 
