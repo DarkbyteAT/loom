@@ -107,7 +107,7 @@ def main() -> None:
     # If they were identical, vmap would have collapsed and the hypernet would
     # be doing no work — print pairwise differences to show they actually differ.
     w = rendered_batch.fc1.weight
-    pair_diffs = jnp.array([jnp.linalg.norm(w[0] - w[i]) for i in range(1, BATCH)])
+    pair_diffs = jnp.linalg.norm(w[0] - w[1:], axis=(-2, -1))
     print(f"‖fc1.weight[0] − fc1.weight[i]‖ for i in 1..{BATCH - 1}: {pair_diffs}")
     assert jnp.all(pair_diffs > 0), "batch elements collapsed — hypernet is degenerate"
 
