@@ -338,12 +338,16 @@ def test_dtype_mismatch_with_x64_disabled():
     def bf16_renderer(path, shape, dtype, params):
         return jnp.ones(shape, dtype=jnp.bfloat16)
 
-    # When/Then: rendering raises DTypeMismatch under default JAX config
+    # When/Then: rendering raises DTypeMismatch under default JAX config,
+    # with structured attrs (expected/actual dtype) populated — not just
+    # the message string.
     with pytest.raises(DTypeMismatch) as exc_info:
         loom.render(target, bf16_renderer, None)
-    msg = str(exc_info.value)
-    assert "dtype" in msg.lower()
-    assert isinstance(exc_info.value, RenderError)
+    err = exc_info.value
+    assert isinstance(err, RenderError)
+    assert "dtype" in str(err).lower()
+    assert err.dtype == jnp.float32  # expected (P's leaf dtype)
+    assert err.actual_dtype == jnp.bfloat16  # what f returned
 
 
 # Note: pytree return cases (dict, tuple) are covered by
