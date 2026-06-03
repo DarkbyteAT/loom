@@ -21,11 +21,11 @@ TIMEOUT_S = 30
 
 EXPECTED = [
     ("01", "one_inr_per_weight"),
-    ("02", "shared_functa_with_film"),
-    ("03", "hypernet_vmap"),
-    ("04", "hypernet_scan_contexts"),
+    ("02", "shared_functa_film"),
+    ("03", "hypernet_distribution"),
+    ("04", "hypernet_conditioning"),
     ("05", "inner_loop_adaptation"),
-    ("06", "heterogeneous_per_leaf"),
+    ("06", "heterogeneous_f"),
 ]
 
 
