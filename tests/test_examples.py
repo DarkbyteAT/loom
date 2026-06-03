@@ -20,6 +20,11 @@ EXAMPLES_DIR = REPO_ROOT / "examples"
 # Sized for JAX cold-compile on CI runners; tighter values flake on first-run
 # tracing for examples 03 (hypernet vmap) and 05 (inner-loop scan-grad).
 TIMEOUT_S = 60
+# Opt-in escape hatch: set this env var to skip-on-missing instead of failing
+# loudly. Used during the pre-merge migration window when example files live
+# on sibling branches; after the wave merges the env var (and the surrounding
+# branch in test_example_runs) become dead and can be removed.
+ALLOW_MISSING = "LOOM_ALLOW_MISSING_EXAMPLES"
 
 EXPECTED = [
     ("01", "one_inr_per_weight"),
@@ -36,13 +41,18 @@ EXPECTED = [
 def test_example_runs(prefix: str, slug: str) -> None:
     # Given: an example script for this pattern
     script = EXAMPLES_DIR / f"{prefix}_{slug}.py"
-    # TODO: remove the skip-on-missing branch once the tier-2 wave merges into
-    # feat/v01-render-substrate. Before merge it lets this PR's CI run green
-    # on a branch that doesn't yet contain the examples; after merge a missing
-    # file is a real test failure (silent skip would hide an accidental
-    # rename/delete), so this branch should hard-fail instead.
+    # TODO: remove this whole branch once the tier-2 wave merges into
+    # feat/v01-render-substrate. After merge, a missing example is a real bug
+    # (rename/delete drift) and should fail loudly, not skip silently. Until
+    # then, opt-in via LOOM_ALLOW_MISSING_EXAMPLES=1 to let cross-branch CI
+    # runs (this PR before merge) stay green.
     if not script.is_file():
-        pytest.skip(f"examples/{prefix}_{slug}.py not present yet")
+        if os.environ.get(ALLOW_MISSING):
+            pytest.skip(f"examples/{prefix}_{slug}.py not present yet")
+        pytest.fail(
+            f"examples/{prefix}_{slug}.py is missing. Set {ALLOW_MISSING}=1 "
+            "to opt into skip-on-missing during cross-branch CI runs."
+        )
 
     # When: we run it as a subprocess. Python prepends the script's directory
     # (examples/) to sys.path, not the repo root, so we explicitly inject the
@@ -52,6 +62,10 @@ def test_example_runs(prefix: str, slug: str) -> None:
     env = os.environ.copy()
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = f"{REPO_ROOT}{os.pathsep}{existing}" if existing else str(REPO_ROOT)
+    # Pin JAX to CPU: these are smoke tests, GPU/TPU yields no benefit, and CI
+    # runners can OOM or contend on accelerators. JAX_PLATFORMS is the current
+    # spelling (the older JAX_PLATFORM_NAME still works but is deprecated).
+    env["JAX_PLATFORMS"] = "cpu"
 
     try:
         result = subprocess.run(
