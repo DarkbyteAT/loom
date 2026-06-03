@@ -123,10 +123,17 @@ def main() -> None:
     # we make no claim about its magnitude.
     print("\n--- contrast smoke test: distinct params vs replicated params ---")
 
-    bodies_replicated = jax.tree_util.tree_map(
+    # `eqx.partition` splits arrays from anything else (static fields, `None`
+    # leaves, plain Python scalars) so the broadcast only touches the array
+    # branch. Without the split, a future non-array dynamic leaf in `ondes`
+    # would TypeError under the slice — this is the standard Equinox pattern
+    # for "do something array-only to a pytree of mixed leaves."
+    arrays_batch, static = eqx.partition(bodies_batch, eqx.is_array)
+    arrays_replicated = jax.tree_util.tree_map(
         lambda x: jnp.broadcast_to(x[0:1], (BATCH, *x.shape[1:])),
-        bodies_batch,
+        arrays_batch,
     )
+    bodies_replicated = eqx.combine(arrays_replicated, static)
 
     rendered_batch_replicated = jax.vmap(loom.render, in_axes=(None, None, 0))(renderable, f, bodies_replicated)
     w_r = rendered_batch_replicated.fc1.weight
