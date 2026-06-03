@@ -47,7 +47,9 @@ def test_example_runs(prefix: str, slug: str) -> None:
     # then, opt-in via LOOM_ALLOW_MISSING_EXAMPLES=1 to let cross-branch CI
     # runs (this PR before merge) stay green.
     if not script.is_file():
-        if os.environ.get(ALLOW_MISSING):
+        # Explicit == "1" so that LOOM_ALLOW_MISSING_EXAMPLES=0 or =false are
+        # *not* treated as opt-in (both are truthy strings under bare `get`).
+        if os.environ.get(ALLOW_MISSING) == "1":
             pytest.skip(f"examples/{prefix}_{slug}.py not present yet")
         pytest.fail(
             f"examples/{prefix}_{slug}.py is missing. Set {ALLOW_MISSING}=1 "
