@@ -67,7 +67,7 @@ def main() -> None:
     # Fix in_dim to the max rank across renderable leaves so a single shared
     # body can serve every leaf shape — same convention as example 02.
     leaves_with_paths = jax.tree_util.tree_leaves_with_path(renderable)
-    in_dim = max(len(leaf.shape) for _, leaf in leaves_with_paths)
+    in_dim = max(leaf.ndim for _, leaf in leaves_with_paths)
 
     # Build B distinct SIREN bodies by splitting `BATCH` keys. In a real
     # hypernet the bodies would be *emitted* by a network from per-batch

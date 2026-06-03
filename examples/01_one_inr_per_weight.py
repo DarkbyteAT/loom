@@ -81,7 +81,7 @@ def main() -> None:
     leaves_with_paths = jax.tree_util.tree_leaves_with_path(renderable)
     keys = jax.random.split(k_inrs, len(leaves_with_paths))
     inrs = {
-        tag_of(path): SIREN(in_dim=len(leaf.shape), hidden_dim=8, num_hidden_layers=2, key=k)
+        tag_of(path): SIREN(in_dim=leaf.ndim, hidden_dim=8, num_hidden_layers=2, key=k)
         for (path, leaf), k in zip(leaves_with_paths, keys, strict=True)
     }
 

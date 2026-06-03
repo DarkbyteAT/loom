@@ -68,7 +68,7 @@ def main() -> None:
     # across renderable leaves and pad coord grids with zeros — a user-side
     # convention, not a loom concern.
     leaves_with_paths = jax.tree_util.tree_leaves_with_path(renderable)
-    in_dim = max(len(leaf.shape) for _, leaf in leaves_with_paths)
+    in_dim = max(leaf.ndim for _, leaf in leaves_with_paths)
 
     body = SIREN(in_dim=in_dim, hidden_dim=HIDDEN_DIM, num_hidden_layers=NUM_HIDDEN_LAYERS, key=k_body)
 
