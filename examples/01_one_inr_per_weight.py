@@ -18,6 +18,8 @@ spectral compression actually happens for any given target.
 
 from __future__ import annotations
 
+import functools
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -143,8 +145,10 @@ def main() -> None:
     rendered_replicated = loom.render(renderable, f, inrs_replicated)
 
     def flat(leaf_pytree, tag: str):
-        attr1, attr2 = tag.split("/")
-        return getattr(getattr(leaf_pytree, attr1), attr2).ravel()
+        # `functools.reduce(getattr, ...)` walks an arbitrary-depth attribute
+        # chain, so this works for both `fc1/weight` and a deeper path like
+        # `encoder/fc1/weight` without ad-hoc tuple unpacking.
+        return functools.reduce(getattr, tag.split("/"), leaf_pytree).ravel()
 
     def cos_sim(a: jax.Array, b: jax.Array) -> float:
         n = min(a.size, b.size)

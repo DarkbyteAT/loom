@@ -16,6 +16,8 @@ it. Compare against pattern 1 (one INR per leaf, no sharing) and pattern
 
 from __future__ import annotations
 
+import functools
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -134,11 +136,11 @@ def main() -> None:
     rendered_zero = eqx.combine(rendered_zero_renderable, passthrough)
 
     def per_leaf_means(rendered_tree, tags: list[str]) -> jax.Array:
-        leaves = []
-        for tag in tags:
-            attr1, attr2 = tag.split("/")
-            leaves.append(jnp.mean(getattr(getattr(rendered_tree, attr1), attr2)))
-        return jnp.stack(leaves)
+        # `functools.reduce(getattr, ...)` walks an arbitrary-depth attribute
+        # chain, so tags like `encoder/fc1/weight` work too — not just the
+        # two-level `fc1/weight` shape this example happens to need.
+        leaves = [functools.reduce(getattr, tag.split("/"), rendered_tree) for tag in tags]
+        return jnp.stack([jnp.mean(leaf) for leaf in leaves])
 
     tags = sorted(films.keys())
     means_distinct = per_leaf_means(rendered, tags)
