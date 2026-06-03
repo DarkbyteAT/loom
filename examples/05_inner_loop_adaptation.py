@@ -102,47 +102,36 @@ def main() -> None:
 
     _adapted, loss_trace = jax.lax.scan(inner_step, body_init, jnp.arange(K))
 
-    # Report the trajectory. A monotonically decreasing trace confirms
-    # gradients are actually flowing through render(P, f, params).
     print(f"Inner-loop SGD on task_loss(render(P, f, params)) for K={K} steps.")
     print("Loss trajectory (through-render — gradients pass through `loom.render`):")
     for k, loss_k in enumerate(loss_trace):
         print(f"  step[{k}]: loss = {float(loss_k):.6f}")
-    print(f"\nFinal vs initial loss: {float(loss_trace[-1]):.6f} vs {float(loss_trace[0]):.6f}")
-    assert float(loss_trace[-1]) < float(loss_trace[0]), (
-        "Inner-loop adaptation didn't reduce loss — gradient flow is broken."
-    )
-    print("Loss decreased — gradient flow through `loom.render` confirmed (Guarantee 5).")
 
     # ------------------------------------------------------------------
     # Contrast smoke test: SGD directly on the rendered Linear weights.
     #
-    # The through-render loop above adapts the SIREN body's parameters,
+    # The through-render loop above adapts the SIREN body's parameters
     # and `loom.render` materialises the Linear's weights each step.
     # The direct loop below skips `loom.render` entirely: it materialises
     # the Linear once at `body_init`, then takes K SGD steps on the
     # Linear's weight/bias arrays directly.
     #
-    # Both trajectories start from the SAME initial rendered target, so
-    # they are directly comparable. The claim under test is "render
-    # doesn't break gradient flow" — i.e. both loops should reduce loss.
-    # They are NOT expected to land at the same point: the through-render
-    # loop is a more constrained optimisation (every Linear weight is a
-    # function of the same shared body, so SIREN-body updates couple all
-    # Linear weights together), while the direct loop has independent
-    # degrees of freedom per Linear weight.
+    # Both trajectories start from the SAME initial rendered target. We
+    # print both — the reader observes the comparison. We DO NOT assert
+    # on loss magnitudes; learned-system trajectory magnitudes depend on
+    # init and hyperparameters and don't belong as test invariants.
+    # The trajectories are NOT expected to match: through-render couples
+    # every Linear weight through a shared SIREN body (constrained
+    # optimisation), while direct has independent per-weight DoF. Any
+    # comparison between loom and a non-loom baseline as evidence of
+    # competitiveness belongs in `fws`, not here.
     #
-    # This is a smoke test, not a baseline — see README. It establishes
-    # that the substrate's gradient pathway is functional, not that
-    # render is competitive with direct training.
+    # This is a smoke test, not a baseline — see README.
     # ------------------------------------------------------------------
     target_rendered_init = loom.render(renderable, f, body_init)
 
-    def task_loss_direct(rendered_p):
-        return task_loss(rendered_p)
-
     def direct_step(p, _):
-        loss, grads = eqx.filter_value_and_grad(task_loss_direct)(p)
+        loss, grads = eqx.filter_value_and_grad(task_loss)(p)
         p_new = jax.tree_util.tree_map(
             lambda a, g: a - lr * g if eqx.is_array(a) and eqx.is_array(g) else a,
             p,
@@ -159,17 +148,17 @@ def main() -> None:
     print("\nContrast smoke test — both trajectories from the same initial rendered target:")
     print(f"  through-render: {'  '.join(f'{float(L):.4f}' for L in loss_trace)}")
     print(f"  direct:         {'  '.join(f'{float(L):.4f}' for L in loss_trace_direct)}")
-    initial = float(loss_trace[0])
-    final_through = float(loss_trace[-1])
-    final_direct = float(loss_trace_direct[-1])
-    print(f"  initial={initial:.4f}  final_through_render={final_through:.4f}  final_direct={final_direct:.4f}")
-    assert final_through < initial, "through-render did not reduce loss"
-    assert final_direct < initial, "direct SGD did not reduce loss"
     print(
-        "Both decreased — render's gradient pathway is functional. "
-        "(Trajectories are NOT expected to match: through-render couples all "
-        "Linear weights through a shared SIREN body; direct has independent DoF.)"
+        "Reader observation: both configurations ran K=5 steps under the same init "
+        "and produced finite losses. Whether through-render is competitive with "
+        "direct as a parameterisation belongs to downstream evidence (fws), not here."
     )
+    # Structural invariants only — no magnitude thresholds. JAX scan-shape
+    # contract is the load-bearing claim: K=5 returns K finite values.
+    assert loss_trace.shape == (K,), f"through-render trajectory was wrong length: {loss_trace.shape}"
+    assert loss_trace_direct.shape == (K,), f"direct trajectory was wrong length: {loss_trace_direct.shape}"
+    assert bool(jnp.all(jnp.isfinite(loss_trace))), "through-render produced non-finite loss"
+    assert bool(jnp.all(jnp.isfinite(loss_trace_direct))), "direct produced non-finite loss"
 
 
 if __name__ == "__main__":

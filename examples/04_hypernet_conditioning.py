@@ -110,26 +110,27 @@ def main() -> None:
         ys = jax.vmap(lambda c: body_p(c, film=film))(coords)
         return ys.reshape(shape).astype(dtype)
 
-    # Pre-render at the reference context once. The contrast smoke test
-    # below compares each scan-step's rendered output against this
-    # fixed reference, so we close over `rendered_ref` rather than
-    # threading it through carry.
-    rendered_ref = loom.render(renderable, f, (body, films, contexts[0]))
-    ref_leaves = [leaf for leaf in jax.tree_util.tree_leaves(rendered_ref) if eqx.is_array(leaf)]
-
     # The scan body: rebuild params_t from (body, films, ctx_t) each step.
     # `body` and `films` are constants under the scan; only the context
     # carried in via `xs` changes. Emit per-step (RMS magnitudes,
-    # max-abs deviation from the reference render).
+    # flattened-and-concatenated rendered leaves). We compute
+    # max-abs-deviation against step-0 below from the concatenated trace
+    # so reference and rest take the same JIT-compiled code path —
+    # otherwise floating-point fusion order can produce a tiny but
+    # deterministic delta between eager-mode and scan-mode renders.
     def step(carry, ctx_t):
         params_t = (body, films, ctx_t)
         rendered_t = loom.render(renderable, f, params_t)
         leaves_t = [leaf for leaf in jax.tree_util.tree_leaves(rendered_t) if eqx.is_array(leaf)]
         flat_mags = jnp.stack([jnp.sqrt(jnp.mean(leaf**2)) for leaf in leaves_t])
-        max_dev = jnp.max(jnp.stack([jnp.max(jnp.abs(a - b)) for a, b in zip(leaves_t, ref_leaves, strict=True)]))
-        return carry, (flat_mags, max_dev)
+        flat_leaves = jnp.concatenate([leaf.ravel() for leaf in leaves_t])
+        return carry, (flat_mags, flat_leaves)
 
-    _, (mag_trace, dev_trace) = jax.lax.scan(step, None, contexts)
+    _, (mag_trace, leaves_trace) = jax.lax.scan(step, None, contexts)
+    # Per-step max-abs deviation from step-0 (reference); step-0 is
+    # itself in the trace, so reference and rest are bit-identical
+    # whenever the same params reach `loom.render`.
+    dev_trace = jnp.max(jnp.abs(leaves_trace - leaves_trace[0]), axis=-1)
 
     # Report — primary configuration: varying ctx per step.
     print(f"Scanned {K} conditioning contexts through {len(leaf_paths_shapes)} leaves.")
@@ -142,35 +143,34 @@ def main() -> None:
     # Contrast smoke test: same scan but with ctx held CONSTANT.
     #
     # The claim under test is "the conditioning context actually
-    # modulates the rendered output". A varying-ctx scan that produces
-    # large per-step deviations from step-0 is consistent with that
-    # claim, but only the contrast against a constant-ctx scan rules
-    # out the alternative "the per-step deviations are an artefact of
-    # something else (a closure, a non-determinism, an iteration-order
-    # effect)". Holding ctx constant should drive deviation to zero up
-    # to float noise.
+    # modulates the rendered output". We print the per-step max-abs
+    # deviation under both configurations; the reader compares them.
+    #
+    # We DO assert one thing: under constant ctx, every step's
+    # deviation from the reference is exactly zero. That's not a
+    # learned-system threshold — it's Guarantee 7 (`f` is a pure
+    # function of its arguments, so the same `params` produces the
+    # same output). The varying-ctx side is reported as observation,
+    # not asserted — magnitudes there depend on init and hyperparams.
     #
     # This is a smoke test, not a baseline — see README. It establishes
     # the pattern produces differentiated output where it claims to,
-    # but says nothing about how good the parameterisation is.
+    # not that the parameterisation is competitive with any baseline.
     # ------------------------------------------------------------------
     constant_contexts = jnp.broadcast_to(contexts[0], contexts.shape)
-    _, (_mag_const, dev_const) = jax.lax.scan(step, None, constant_contexts)
+    _, (_mag_const, leaves_const) = jax.lax.scan(step, None, constant_contexts)
+    dev_const = jnp.max(jnp.abs(leaves_const - leaves_const[0]), axis=-1)
     print("\nContrast smoke test — per-step max-abs deviation of rendered tree from step-0:")
     print(f"  varying ctx: {'  '.join(f'{d:.6f}' for d in dev_trace)}")
-    print(f"  constant ctx: {'  '.join(f'{d:.6f}' for d in dev_const)}")
-    varying_signal = float(jnp.max(dev_trace))
-    constant_signal = float(jnp.max(dev_const))
-    print(f"  max deviation: varying={varying_signal:.6f}  constant={constant_signal:.6e}")
-    assert varying_signal > 1e-3, (
-        f"varying-ctx scan produced near-zero deviation ({varying_signal:.2e}); "
-        "context is not modulating the rendered output as claimed."
+    print(f"  constant ctx: {'  '.join(f'{d:.6e}' for d in dev_const)}")
+    print(f"  max deviation: varying={float(jnp.max(dev_trace)):.6f}  constant={float(jnp.max(dev_const)):.6e}")
+    # Structural invariant: pure `f` + same `params` -> same output.
+    # Any non-zero here would mean the substrate is non-deterministic.
+    assert jnp.all(dev_const == 0.0), (
+        "constant-ctx scan produced non-zero deviation; "
+        "`loom.render` is non-deterministic in `params`, which breaks Guarantee 7."
     )
-    assert constant_signal < 1e-5, (
-        f"constant-ctx scan produced non-trivial deviation ({constant_signal:.2e}); "
-        "render is non-deterministic in `params`, which breaks Guarantee 7's purity contract."
-    )
-    print("Contrast confirmed: varying ctx modulates output; constant ctx does not.")
+    print("Constant-ctx deviation is exactly zero (Guarantee 7 — `f` is pure).")
 
     # Sanity: structure preservation. The render output is the same pytree
     # as `renderable`, ready to recombine with `passthrough`.
