@@ -64,10 +64,6 @@ def test_example_runs(prefix: str, slug: str) -> None:
     env = os.environ.copy()
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = f"{REPO_ROOT}{os.pathsep}{existing}" if existing else str(REPO_ROOT)
-    # Pin JAX to CPU: these are smoke tests, GPU/TPU yields no benefit, and CI
-    # runners can OOM or contend on accelerators. JAX_PLATFORMS is the current
-    # spelling (the older JAX_PLATFORM_NAME still works but is deprecated).
-    env["JAX_PLATFORMS"] = "cpu"
 
     try:
         result = subprocess.run(
