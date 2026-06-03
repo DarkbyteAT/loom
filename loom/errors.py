@@ -50,14 +50,24 @@ class RenderError(Exception):
     """
 
     def __init__(self, path: KeyPath, shape: tuple[int, ...], dtype: Any) -> None:
-        """Store leaf context and build the message via `_message`."""
+        """Store leaf context; the message is rendered lazily by `__str__`."""
         self.path = path
         self.shape = shape
         self.dtype = dtype
-        super().__init__(self._message())
+        super().__init__()
 
-    def _message(self) -> str:
+    def __str__(self) -> str:
+        """Render the path-pointing failure message."""
         return f"render failed at leaf {_format_path(self.path)} (expected shape={self.shape}, dtype={self.dtype})"
+
+    def __reduce__(self) -> tuple[Any, tuple[Any, ...]]:
+        """Support cross-process serialisation of the exception itself.
+
+        Needed when JAX raises this error inside a worker process (e.g.
+        multi-host runs) and the driver re-raises it. Without this, the
+        custom `__init__` signature breaks default reconstruction.
+        """
+        return (self.__class__, (self.path, self.shape, self.dtype))
 
 
 class ShapeMismatch(RenderError):
@@ -82,11 +92,16 @@ class ShapeMismatch(RenderError):
         self.actual_shape = actual_shape
         super().__init__(path, expected_shape, dtype)
 
-    def _message(self) -> str:
+    def __str__(self) -> str:
+        """Render the shape-mismatch message with actual vs expected."""
         return (
             f"shape mismatch at leaf {_format_path(self.path)}: "
             f"f returned shape={self.actual_shape}, expected shape={self.shape}"
         )
+
+    def __reduce__(self) -> tuple[Any, tuple[Any, ...]]:
+        """Override base `__reduce__` to carry the 4-arg signature."""
+        return (self.__class__, (self.path, self.shape, self.actual_shape, self.dtype))
 
 
 class DTypeMismatch(RenderError):
@@ -111,8 +126,13 @@ class DTypeMismatch(RenderError):
         self.actual_dtype = actual_dtype
         super().__init__(path, shape, expected_dtype)
 
-    def _message(self) -> str:
+    def __str__(self) -> str:
+        """Render the dtype-mismatch message with actual vs expected."""
         return (
             f"dtype mismatch at leaf {_format_path(self.path)}: "
             f"f returned dtype={self.actual_dtype}, expected dtype={self.dtype}"
         )
+
+    def __reduce__(self) -> tuple[Any, tuple[Any, ...]]:
+        """Override base `__reduce__` to carry the 4-arg signature."""
+        return (self.__class__, (self.path, self.shape, self.dtype, self.actual_dtype))

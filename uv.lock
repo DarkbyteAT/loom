@@ -459,14 +459,19 @@ dependencies = [
     { name = "jaxtyping" },
     { name = "matplotlib" },
     { name = "numpy" },
-    { name = "ondes" },
     { name = "optax" },
     { name = "scikit-learn" },
+]
+
+[package.optional-dependencies]
+examples = [
+    { name = "ondes" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "bandit" },
+    { name = "loom", extra = ["examples"] },
     { name = "pre-commit" },
     { name = "pyright" },
     { name = "pytest" },
@@ -481,14 +486,16 @@ requires-dist = [
     { name = "jaxtyping", specifier = ">=0.3.9" },
     { name = "matplotlib", specifier = ">=3.10.9" },
     { name = "numpy", specifier = ">=2.4.4" },
-    { name = "ondes", git = "https://github.com/DarkbyteAT/ondes.git" },
+    { name = "ondes", marker = "extra == 'examples'", git = "https://github.com/DarkbyteAT/ondes.git" },
     { name = "optax", specifier = ">=0.2.8" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
 ]
+provides-extras = ["examples"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "bandit" },
+    { name = "loom", extras = ["examples"] },
     { name = "pre-commit" },
     { name = "pyright" },
     { name = "pytest" },
