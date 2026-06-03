@@ -115,11 +115,12 @@ def main() -> None:
     #
     # Build a second batch where every batch element is the SAME body (the
     # first one replicated B times) and render through the same vmap call.
-    # Under correct vmap semantics the per-batch pair-diffs MUST be exactly
-    # zero — this is a structural invariant of `jax.vmap`, not a property
-    # of initial conditions, so we assert it. The distinct-params line
-    # alongside is reported for the reader to observe; we make no claim
-    # about its magnitude.
+    # Under correct vmap semantics the per-batch pair-diffs must collapse to
+    # zero up to floating-point rounding — this is a structural invariant of
+    # `jax.vmap`, not a property of initial conditions, so we assert it
+    # (with a dtype-derived tolerance — see the assert site below). The
+    # distinct-params line alongside is reported for the reader to observe;
+    # we make no claim about its magnitude.
     print("\n--- contrast smoke test: distinct params vs replicated params ---")
 
     bodies_replicated = jax.tree_util.tree_map(
@@ -133,7 +134,17 @@ def main() -> None:
 
     print(f"with distinct params:   pair-diffs = {pair_diffs}")
     print(f"with replicated params: pair-diffs = {pair_diffs_replicated}")
-    assert jnp.all(pair_diffs_replicated == 0.0), "vmap is fabricating diversity not present in params"
+
+    # Tolerance is derived from leaf dtype, not chosen by intuition, so the
+    # assertion transfers from float32 to float16 / float64 without silent
+    # breakage. N=64 leaves headroom for the handful of fp ops between
+    # `loom.render`'s input and the norm-of-difference here (SIREN forward
+    # pass, broadcast subtraction, two-axis reduction).
+    eps = jnp.finfo(pair_diffs_replicated.dtype).eps
+    assert jnp.all(pair_diffs_replicated < 64 * eps), (
+        "vmap is fabricating diversity not present in params — replicated-slice "
+        "outputs should be identical up to floating-point rounding"
+    )
 
 
 if __name__ == "__main__":
