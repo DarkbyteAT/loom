@@ -176,6 +176,63 @@ def main() -> None:
     assert h.shape == (10,)
     print("Heterogeneous f works — both dispatch branches contributed contract-valid leaves.")
 
+    # ------------------------------------------------------------------
+    # Contrast smoke test: same f, but a single SHARED renderer for all
+    # leaves (no conv/fc dispatch).
+    #
+    # The claim under test is "heterogeneous dispatch produces measurably
+    # different output statistics for the two leaf groups". A trivial
+    # version of that claim ("conv-norm != fc-norm") holds for almost
+    # any renderer just from leaf-size asymmetry. The non-trivial
+    # version is "the conv-norm/fc-norm ratio under heterogeneous
+    # dispatch differs from the ratio under a uniform renderer that
+    # treats every leaf the same way".
+    #
+    # We build a uniform `f_uniform` that uses the same plain SIREN for
+    # every leaf, irrespective of `path`. Then we compute, for both
+    # renders, the mean L2-norm across leaves in each branch and
+    # compare the conv/fc ratios.
+    # ------------------------------------------------------------------
+    def f_uniform(path, shape, dtype, params):
+        # Single renderer, ignores `path` entirely. This is what loom
+        # would do if the user had no notion of "leaf families" at all.
+        del path  # uniform renderer is path-agnostic by design
+        body = params
+        n = math.prod(shape)
+        coords_1d = jnp.linspace(-1.0, 1.0, n)[:, None]
+        ys = jax.vmap(body)(coords_1d)
+        return ys.reshape(shape).astype(dtype)
+
+    rendered_uniform = loom.render(renderable, f_uniform, fc_body)
+
+    def per_branch_mean_norm(tree) -> tuple[float, float]:
+        conv_norms: list[float] = []
+        fc_norms: list[float] = []
+        for path, leaf in jax.tree_util.tree_leaves_with_path(tree, is_leaf=eqx.is_array):
+            if not eqx.is_array(leaf):
+                continue
+            norm = float(jnp.sqrt(jnp.sum(leaf**2)))
+            if _is_conv_path(path):
+                conv_norms.append(norm)
+            elif _is_fc_path(path):
+                fc_norms.append(norm)
+        return (sum(conv_norms) / len(conv_norms), sum(fc_norms) / len(fc_norms))
+
+    het_conv, het_fc = per_branch_mean_norm(rendered)
+    uni_conv, uni_fc = per_branch_mean_norm(rendered_uniform)
+    het_ratio = het_conv / het_fc
+    uni_ratio = uni_conv / uni_fc
+    print("\nContrast smoke test — per-branch mean L2-norm (heterogeneous vs uniform `f`):")
+    print(f"  heterogeneous: conv-mean={het_conv:.4f}  fc-mean={het_fc:.4f}  ratio={het_ratio:.4f}")
+    print(f"  uniform:       conv-mean={uni_conv:.4f}  fc-mean={uni_fc:.4f}  ratio={uni_ratio:.4f}")
+    rel_diff = abs(het_ratio - uni_ratio) / max(abs(uni_ratio), 1e-8)
+    print(f"  conv/fc ratio relative difference: {rel_diff:.4f}")
+    assert rel_diff > 0.1, (
+        f"heterogeneous and uniform renders produced near-identical conv/fc ratios "
+        f"(rel-diff={rel_diff:.4f}); the dispatch isn't producing differentiated statistics."
+    )
+    print("Contrast confirmed: heterogeneous dispatch produces measurably different conv/fc ratio than uniform.")
+
 
 if __name__ == "__main__":
     main()

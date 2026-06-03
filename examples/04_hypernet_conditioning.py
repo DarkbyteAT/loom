@@ -110,30 +110,67 @@ def main() -> None:
         ys = jax.vmap(lambda c: body_p(c, film=film))(coords)
         return ys.reshape(shape).astype(dtype)
 
+    # Pre-render at the reference context once. The contrast smoke test
+    # below compares each scan-step's rendered output against this
+    # fixed reference, so we close over `rendered_ref` rather than
+    # threading it through carry.
+    rendered_ref = loom.render(renderable, f, (body, films, contexts[0]))
+    ref_leaves = [leaf for leaf in jax.tree_util.tree_leaves(rendered_ref) if eqx.is_array(leaf)]
+
     # The scan body: rebuild params_t from (body, films, ctx_t) each step.
     # `body` and `films` are constants under the scan; only the context
-    # carried in via `xs` changes.
+    # carried in via `xs` changes. Emit per-step (RMS magnitudes,
+    # max-abs deviation from the reference render).
     def step(carry, ctx_t):
         params_t = (body, films, ctx_t)
         rendered_t = loom.render(renderable, f, params_t)
-        # Per-leaf magnitude — proves the context actually modulates output.
-        # Comprehend over `tree_leaves` directly and filter; using
-        # `eqx.filter(..., is_array)` + `tree_map` is fragile because
-        # `filter` replaces non-array leaves with `None`, and `None` is
-        # itself a leaf under `tree_map` — the mapper would crash on it
-        # the moment the target architecture grows a non-array leaf.
-        mags = [jnp.sqrt(jnp.mean(leaf**2)) for leaf in jax.tree_util.tree_leaves(rendered_t) if eqx.is_array(leaf)]
-        flat_mags = jnp.stack(mags)
-        return carry, flat_mags
+        leaves_t = [leaf for leaf in jax.tree_util.tree_leaves(rendered_t) if eqx.is_array(leaf)]
+        flat_mags = jnp.stack([jnp.sqrt(jnp.mean(leaf**2)) for leaf in leaves_t])
+        max_dev = jnp.max(jnp.stack([jnp.max(jnp.abs(a - b)) for a, b in zip(leaves_t, ref_leaves, strict=True)]))
+        return carry, (flat_mags, max_dev)
 
-    _, mag_trace = jax.lax.scan(step, None, contexts)
+    _, (mag_trace, dev_trace) = jax.lax.scan(step, None, contexts)
 
-    # Report
+    # Report — primary configuration: varying ctx per step.
     print(f"Scanned {K} conditioning contexts through {len(leaf_paths_shapes)} leaves.")
     print("Per-step rendered-weight RMS magnitudes (rows=ctx, cols=leaves):")
     for k in range(K):
         row = "  ".join(f"{m:.4f}" for m in mag_trace[k])
         print(f"  ctx[{k}]: {row}")
+
+    # ------------------------------------------------------------------
+    # Contrast smoke test: same scan but with ctx held CONSTANT.
+    #
+    # The claim under test is "the conditioning context actually
+    # modulates the rendered output". A varying-ctx scan that produces
+    # large per-step deviations from step-0 is consistent with that
+    # claim, but only the contrast against a constant-ctx scan rules
+    # out the alternative "the per-step deviations are an artefact of
+    # something else (a closure, a non-determinism, an iteration-order
+    # effect)". Holding ctx constant should drive deviation to zero up
+    # to float noise.
+    #
+    # This is a smoke test, not a baseline — see README. It establishes
+    # the pattern produces differentiated output where it claims to,
+    # but says nothing about how good the parameterisation is.
+    # ------------------------------------------------------------------
+    constant_contexts = jnp.broadcast_to(contexts[0], contexts.shape)
+    _, (_mag_const, dev_const) = jax.lax.scan(step, None, constant_contexts)
+    print("\nContrast smoke test — per-step max-abs deviation of rendered tree from step-0:")
+    print(f"  varying ctx: {'  '.join(f'{d:.6f}' for d in dev_trace)}")
+    print(f"  constant ctx: {'  '.join(f'{d:.6f}' for d in dev_const)}")
+    varying_signal = float(jnp.max(dev_trace))
+    constant_signal = float(jnp.max(dev_const))
+    print(f"  max deviation: varying={varying_signal:.6f}  constant={constant_signal:.6e}")
+    assert varying_signal > 1e-3, (
+        f"varying-ctx scan produced near-zero deviation ({varying_signal:.2e}); "
+        "context is not modulating the rendered output as claimed."
+    )
+    assert constant_signal < 1e-5, (
+        f"constant-ctx scan produced non-trivial deviation ({constant_signal:.2e}); "
+        "render is non-deterministic in `params`, which breaks Guarantee 7's purity contract."
+    )
+    print("Contrast confirmed: varying ctx modulates output; constant ctx does not.")
 
     # Sanity: structure preservation. The render output is the same pytree
     # as `renderable`, ready to recombine with `passthrough`.
