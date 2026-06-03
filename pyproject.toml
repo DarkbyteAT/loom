@@ -27,8 +27,20 @@ dependencies = [
     "scikit-learn>=1.8.0",
 ]
 
+[project.optional-dependencies]
+# `ondes` is required by example renderers and the test suite, not by the
+# library itself — install with `loom[examples]` to get INR primitives.
+examples = ["ondes"]
+
+# For local co-development against a checkout of ondes, swap this for:
+#   ondes = { path = "../ondes", editable = true }
+# Refresh after switching with `uv sync --reinstall`.
+[tool.uv.sources]
+ondes = { git = "https://github.com/DarkbyteAT/ondes.git" }
+
 [dependency-groups]
 dev = [
+    "loom[examples]",
     "pyright",
     "pytest",
     "ruff",
