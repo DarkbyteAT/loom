@@ -46,15 +46,20 @@ def test_example_runs(prefix: str, slug: str) -> None:
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = f"{REPO_ROOT}{os.pathsep}{existing}" if existing else str(REPO_ROOT)
 
-    result = subprocess.run(
-        [sys.executable, str(script)],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=TIMEOUT_S,
-        cwd=REPO_ROOT,
-        env=env,
-    )
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_S,
+            cwd=REPO_ROOT,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # capture_output=True swallows the partial stdout/stderr into the
+        # exception; surface them so CI failures are debuggable.
+        pytest.fail(f"{script.name} timed out after {TIMEOUT_S}s\nstdout:\n{exc.stdout!r}\nstderr:\n{exc.stderr!r}")
 
     # Then: it exits cleanly and prints a PASS sentinel
     assert result.returncode == 0, (
