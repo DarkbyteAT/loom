@@ -1,7 +1,7 @@
 [project]
 name = "loom"
 version = "0.1.0"
-description = "Implicit neural renderer for parameterising neural network weights as low-dimensional manifolds"
+description = "A substrate for re-parameterising JAX pytrees by the output of arbitrary functions, in a way that is scannable and optimisable"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -19,16 +19,23 @@ classifiers = [
 dependencies = [
     "equinox>=0.13.8",
     "jax>=0.10.0",
-    "jax-tqdm>=0.4.0",
     "jaxtyping>=0.3.9",
-    "matplotlib>=3.10.9",
-    "numpy>=2.4.4",
-    "optax>=0.2.8",
-    "scikit-learn>=1.8.0",
 ]
+
+[project.optional-dependencies]
+# `ondes` is required by example renderers and the test suite, not by the
+# library itself — install with `loom[examples]` to get INR primitives.
+examples = ["ondes"]
+
+# For local co-development against a checkout of ondes, swap this for:
+#   ondes = { path = "../ondes", editable = true }
+# Refresh after switching with `uv sync --reinstall`.
+[tool.uv.sources]
+ondes = { git = "https://github.com/DarkbyteAT/ondes.git" }
 
 [dependency-groups]
 dev = [
+    "loom[examples]",
     "pyright",
     "pytest",
     "ruff",
